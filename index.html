@@ -480,13 +480,27 @@ function wrap(r){ return new Promise(function(res, rej){ r.onsuccess = function(
 function store(n, mode){ return idb.transaction(n, mode).objectStore(n); }
 function done(tx){ return new Promise(function(res, rej){ tx.oncomplete = function(){ res(); }; tx.onerror = tx.onabort = function(){ var e = tx.error; rej(err(e && e.name === 'QuotaExceededError' ? 'quota_exceeded' : 'write_failed')); }; }); }
 async function loadAll(){
+  try{ if(navigator.storage && navigator.storage.persist) navigator.storage.persist(); }catch(e){}
   idb = await open();
   for(var i = 0; i < 3; i++){
     var n = STORES[i], keys = await wrap(store(n, 'readonly').getAllKeys()), vals = await wrap(store(n, 'readonly').getAll());
     keys.forEach(function(k, j){ mem[n].set(k, vals[j]); });
   }
-  var ak = await wrap(store('assets', 'readonly').getAllKeys()), av = await wrap(store('assets', 'readonly').getAll());
-  ak.forEach(function(k, j){ try{ urls.set(k, URL.createObjectURL(av[j])); }catch(e){} });
+  loadAssets();
+}
+var assetsDone = null;
+window.__assetsReady = new Promise(function(r){ assetsDone = r; });
+async function loadAssets(){
+  try{
+    var ak = await wrap(store('assets', 'readonly').getAllKeys());
+    for(var i = 0; i < ak.length; i += 24){
+      var chunk = ak.slice(i, i + 24);
+      var blobs = await Promise.all(chunk.map(function(k){ return wrap(store('assets', 'readonly').get(k)); }));
+      chunk.forEach(function(k, j){ if(blobs[j] && !urls.has(k)){ try{ urls.set(k, URL.createObjectURL(blobs[j])); }catch(e){} } });
+      notify('items');
+    }
+  }catch(e){}
+  assetsDone(true);
 }
 var ready = null;
 function init(){ if(!ready) ready = loadAll().then(function(){ return true; }, function(){ return false; }); return ready; }
@@ -495,7 +509,22 @@ function snapshot(n){
   mem[n].forEach(function(v, k){ docs.push({ id: k, data: function(){ return JSON.parse(JSON.stringify(v)); } }); });
   return { docs: docs, metadata: { fromCache: false } };
 }
-function notify(n){ var snap = snapshot(n); subs[n].forEach(function(cb){ try{ cb(snap); }catch(e){} }); }
+var pend = {};
+function notify(n){
+  if(pend[n]) return;
+  pend[n] = setTimeout(function(){ pend[n] = 0; var snap = snapshot(n); subs[n].forEach(function(cb){ try{ cb(snap); }catch(e){} }); }, 30);
+}
+window.__peekItem = function(id){ var v = mem.items.get(id); return v ? JSON.parse(JSON.stringify(v)) : null; };
+window.__syncApply = async function(sets, dels){
+  if(!sets.length && !dels.length) return;
+  var tx = idb.transaction('items', 'readwrite'), os = tx.objectStore('items');
+  sets.forEach(function(o){ os.put(o.v, o.id); });
+  dels.forEach(function(id){ os.delete(id); });
+  await done(tx);
+  sets.forEach(function(o){ mem.items.set(o.id, o.v); });
+  dels.forEach(function(id){ mem.items.delete(id); });
+  notify('items');
+};
 function newId(){ return 'x' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 function collection(n){
   return {
@@ -1682,6 +1711,30 @@ async function readItems(db){
     un = db.collection('items').onSnapshot(function(snap){ if(got) return; got = true; var m = {}; snap.docs.forEach(function(d){ m[d.id] = d.data(); }); res(m); setTimeout(function(){ if(un) un(); }, 0); });
   });
 }
+var photoBusy = {};
+function startPhotoJobs(url, jobs){
+  jobs = jobs.filter(function(j){ return !photoBusy[j.want]; });
+  if(!jobs.length) return;
+  jobs.forEach(function(j){ photoBusy[j.want] = true; });
+  var idx = 0, got = 0;
+  async function worker(){
+    while(idx < jobs.length){
+      var j = jobs[idx++];
+      try{
+        if(await fetchPhoto(url, j.want)){
+          var cur = window.__peekItem(j.id);
+          if(cur){
+            if(cur.photoId !== j.want && String(cur.updatedAt || '') <= j.ru) cur.photoId = j.want;
+            await window.__syncApply([{ id: j.id, v: cur }], []);
+            got++;
+          }
+        }
+      }catch(e){}
+      photoBusy[j.want] = false;
+    }
+  }
+  Promise.all([worker(), worker(), worker(), worker(), worker()]).then(function(){ photoBusy = {}; });
+}
 async function pull(){
   var url = get(K_URL);
   if(!url || pulling) return;
@@ -1693,34 +1746,37 @@ async function pull(){
     if(!data || !data.rows) throw new Error('bad');
     var db = await window.claude.use('db');
     if(!db) throw new Error('nodb');
-    var local = await readItems(db), col = db.collection('items'), added = 0, removed = 0;
+    await window.__assetsReady;
+    var local = await readItems(db), added = 0, removed = 0;
     var photoSet = {}; (data.photoIds || []).forEach(function(x){ photoSet[x] = true; });
-    var shown = {}; Object.keys(local).forEach(function(k){ var pid = local[k].photoId; if(pid && window.__photoUrl(pid)) shown[pid] = true; });
-    window.__syncMute = true;
+    var sets = [], dels = [], jobs = [];
     for(var i = 0; i < data.rows.length; i++){
-      var r = data.rows[i], l = local[r.id], ru = String(r.updatedAt || '');
+      var r = data.rows[i], l = local[r.id], ru = String(r.updatedAt || ''), lu = l ? String(l.updatedAt || '') : '';
       if(r.deleted){
-        if(l && ru >= String(l.updatedAt || '')){ await col.doc(r.id).delete(); removed++; }
+        if(l && ru >= lu){ dels.push(r.id); removed++; }
         continue;
       }
       var want = (r.photoId && photoSet[r.photoId]) ? r.photoId : '';
-      if(want && !(await fetchPhoto(url, want))) want = '';
-      if(l && String(l.updatedAt || '') >= ru){
-        if(want && l.photoId !== want && (!l.photoId && String(l.updatedAt || '') === ru)){
-          await col.doc(r.id).set(Object.assign({}, l, { photoId: want })); added++;
-        }else if(want && l.photoId === want && !shown[want]){
-          await col.doc(r.id).set(Object.assign({}, l)); added++;
+      var have = !!(want && window.__photoUrl(want));
+      if(l && lu >= ru){
+        if(want && !l.photoId && lu === ru){
+          if(have){ sets.push({ id: r.id, v: Object.assign({}, l, { photoId: want }) }); added++; }
+          else jobs.push({ id: r.id, want: want, ru: ru });
+        }else if(want && l.photoId === want && !have){
+          jobs.push({ id: r.id, want: want, ru: ru });
         }
         continue;
       }
-      await col.doc(r.id).set({
+      sets.push({ id: r.id, v: {
         name: r.name || '', barcode: r.barcode || '', qty: Number(r.qty) || 0, expiry: r.expiry || '', noExpiry: !!r.noExpiry,
         brand: r.brand || '', batchCode: r.batchCode || '', expirySource: r.expirySource || '',
-        updatedAt: ru || new Date().toISOString(), createdAt: (l && l.createdAt) || ru || new Date().toISOString(), photoId: want || (l && l.photoId) || null
-      });
+        updatedAt: ru || new Date().toISOString(), createdAt: (l && l.createdAt) || ru || new Date().toISOString(), photoId: (have ? want : (l && l.photoId)) || null
+      } });
       added++;
+      if(want && !have) jobs.push({ id: r.id, want: want, ru: ru });
     }
-    window.__syncMute = false;
+    await window.__syncApply(sets, dels);
+    startPhotoJobs(url, jobs);
     var remote = {}; data.rows.forEach(function(r){ remote[r.id] = r; });
     var q = queue(), pushed = 0;
     var toUpload = [], seen = {};
@@ -1755,7 +1811,7 @@ $('syncBox').hidden = true; $('syncBox').style.display = 'none';
 document.addEventListener('visibilitychange', function(){ if(!document.hidden) pull(); });
 setInterval(function(){ if(!document.hidden) pull(); }, 30000);
 window.addEventListener('online', flush);
-var cur = get(K_URL); if(cur){ $('syncUrl').value = cur; setTimeout(function(){ flush().then(pull); }, 1500); }
+var cur = get(K_URL); if(cur){ $('syncUrl').value = cur; pull(); }
 tag();
 })();
 </script>
