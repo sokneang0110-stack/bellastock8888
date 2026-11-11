@@ -1441,7 +1441,19 @@ function $(id){ return document.getElementById(id); }
 function queue(){ try{ return JSON.parse(get(K_Q) || '[]'); }catch(e){ return []; } }
 function setQ(q){ put(K_Q, JSON.stringify(q)); }
 function say(text, kind){ var s = $('syncStatus'); s.textContent = text; s.setAttribute('data-kind', kind || ''); }
-function tag(){ var u = get(K_URL), n = queue().length; $('syncTag').textContent = !u ? 'Not set up' : (n ? n + ' waiting to send' : 'On'); }
+var sheetOk = false;
+function topLabel(){
+  var u = get(K_URL), n = queue().length, el = $('sync');
+  if(!el || el.dataset.state === 'error' || el.dataset.state === 'off' || el.dataset.state === 'loading') return;
+  if(!u){ el.dataset.state = 'slow'; $('syncText').textContent = 'Saved on this phone only. Not backed up'; }
+  else if(n){ el.dataset.state = 'slow'; $('syncText').textContent = 'Saved here. ' + n + ' waiting to reach the sheet'; }
+  else if(sheetOk){ el.dataset.state = 'ok'; $('syncText').textContent = 'Synced with Google Sheet'; }
+  else { el.dataset.state = 'slow'; $('syncText').textContent = 'Saved here. Checking the sheet…'; }
+}
+setInterval(topLabel, 1500);
+var _setSync = window.setSync;
+window.setSync = function(state, text){ _setSync(state, text); if(state === 'ok') topLabel(); };
+function tag(){ var u = get(K_URL), n = queue().length; $('syncTag').textContent = !u ? 'Not set up' : (n ? n + ' waiting to send' : 'On'); topLabel(); }
 function rowOf(id, v){
   return { id: id, barcode: v.barcode || '', name: v.name || '', qty: v.qty, expiry: v.expiry || '', noExpiry: !!v.noExpiry, brand: v.brand || '', batchCode: v.batchCode || '', expirySource: v.expirySource || '', updatedAt: v.updatedAt || '' };
 }
@@ -1526,8 +1538,10 @@ async function pull(){
       if(!rr || String(l.updatedAt || '') > String(rr.updatedAt || '')){ q.push({ op: 'upsert', row: rowOf(id, l) }); pushed++; }
     });
     if(pushed){ setQ(q); tag(); await flush(); }
+    sheetOk = true;
     say('Synced at ' + new Date().toLocaleTimeString() + (added || removed || pushed ? '. ' + added + ' updated and ' + removed + ' removed on this phone, ' + pushed + ' sent to the sheet.' : '. Everything matches your sheet.'), 'good');
   }catch(e){
+    sheetOk = false;
     say('Could not read the sheet. Check the address and your internet.', 'bad');
   }finally{
     window.__syncMute = false; pulling = false; tag();
