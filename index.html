@@ -1434,7 +1434,13 @@ init();
 (function(){
 'use strict';
 var K_URL = 'stockroom-sync-url', K_Q = 'stockroom-sync-queue', K_DEV = 'stockroom-phone';
-function get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+var DEFAULT_URL = 'https://script.google.com/macros/s/AKfycbyh3kOsTohPHk8TxbS8Lr1_aM7kCySacEZ_wFXC5JFspQ4LTW4dK4MOqU3OL73rHeLhRA/exec';
+function get(k){
+  var v = null;
+  try{ v = localStorage.getItem(k); }catch(e){}
+  if(k === K_URL){ if(v === 'off') return null; return v || DEFAULT_URL; }
+  return v;
+}
 function put(k, v){ try{ if(v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); }catch(e){} }
 var dev = get(K_DEV); if(!dev){ dev = 'Phone-' + Math.random().toString(36).slice(2, 6).toUpperCase(); put(K_DEV, dev); }
 function $(id){ return document.getElementById(id); }
@@ -1550,7 +1556,7 @@ async function pull(){
 async function syncNow(){ if(!get(K_URL)){ say('Paste the web app address first.', 'bad'); return; } await pull(); }
 $('syncSave').addEventListener('click', function(){
   var u = $('syncUrl').value.trim();
-  if(!u){ put(K_URL, null); say('Backup is turned off.', ''); tag(); return; }
+  if(!u){ put(K_URL, 'off'); sheetOk = false; say('Backup is turned off on this phone.', ''); tag(); return; }
   if(!/^https:\/\/script\.google\.com\/macros\/s\/[^\s]+\/exec$/.test(u)){ say('That does not look right. It should start with https://script.google.com/macros/s/ and end with /exec', 'bad'); return; }
   put(K_URL, u); say('Saved. Syncing your items…', ''); tag(); syncNow();
 });
