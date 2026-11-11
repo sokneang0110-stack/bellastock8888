@@ -106,6 +106,15 @@ button,input{font:inherit;color:inherit}
 .viewer img{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px}
 .viewer-close{position:absolute;top:calc(12px + env(safe-area-inset-top,0px));right:max(16px, env(safe-area-inset-right, 0px))}
 .inline{display:flex;gap:8px}
+.extra-list{display:flex;flex-direction:column;gap:10px}
+.extra-list:empty{display:none}
+.extra-add{align-self:flex-start;border-color:var(--line);color:var(--ink)}
+.extra-row{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2)}
+.extra-top{display:flex;align-items:center;justify-content:space-between}
+.extra-title{font-size:13px;font-weight:600;color:var(--muted)}
+.extra-x{min-height:36px;min-width:36px;border:0;background:transparent;color:var(--muted);font-size:18px;cursor:pointer}
+.extra-row input{height:48px;padding:0 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);font-size:16px;min-width:0}
+.extra-row .inline .x-qty{flex:none;width:120px}
 .inline input{flex:1;min-width:0}
 .mono{font-family:var(--font-mono);letter-spacing:.02em}
 .lots{margin:0;padding-left:18px;font-size:14px;display:flex;flex-direction:column;gap:2px}
@@ -299,6 +308,8 @@ input:disabled:not(.cal){opacity:.5}
         </div>
         <p class="tiny" id="expiryHint">Type year and month, like 202612. The day is not needed.</p>
         <div class="noexp-row"><button type="button" class="chip" id="noExpBtn" aria-pressed="false">No expiration date</button></div>
+        <div class="extra-list" id="extraList"></div>
+        <button type="button" class="btn btn-quiet btn-small extra-add" id="addExtraBtn">+ Add another expiry date</button>
       </div>
 
       <div class="again" id="againBox" hidden>
@@ -807,7 +818,7 @@ async function saveItem(o){
     throw ex;
   }
   if(oldPhoto && assets && !photoInUse(oldPhoto, ref.id)){ try{ await assets.delete(oldPhoto); }catch(e){} }
-  return { id: ref.id, photoSkipped: photoSkipped };
+  return { id: ref.id, photoSkipped: photoSkipped, photoId: photoId };
 }
 
 /* brands and batch codes */
@@ -1006,7 +1017,7 @@ function checkBarcode(){
 $('expiry').addEventListener('input', checkBarcode);
 function resetAdd(){
   $('barcode').value = ''; $('name').value = ''; $('qty').value = ''; setExpiry('expiry', ''); $('batchCode').value = ''; lastBatchExpiry = '';
-  setPhotoState(addPhoto, null);
+  setPhotoState(addPhoto, null); $('extraList').replaceChildren();
   matchId = null; photoLot = null; autoName = ''; $('matchBox').hidden = true;
   setStatus($('scanStatus'), 'Tap the barcode icon, point the camera at the barcode, and the number fills in by itself.', '');
   $('addError').textContent = ''; updateBatchLookup();
@@ -1166,6 +1177,42 @@ document.addEventListener('click', function(e){
   input.value = Math.max(0, cur + Number(b.dataset.step));
 });
 
+function addExtraRow(){
+  var row = el('div', 'extra-row'), top = el('div', 'extra-top');
+  top.appendChild(el('span', 'extra-title', 'Another expiry date and its quantity'));
+  var x = el('button', 'extra-x', '✕'); x.type = 'button'; x.setAttribute('aria-label', 'Remove this date');
+  top.appendChild(x);
+  var line = el('div', 'inline');
+  var d = el('input', 'x-date'); d.type = 'text'; d.inputMode = 'numeric'; d.autocomplete = 'off'; d.placeholder = 'YYYY-MM'; d.maxLength = 10; d.setAttribute('aria-label', 'Another expiry date');
+  var q = el('input', 'x-qty'); q.type = 'number'; q.inputMode = 'numeric'; q.min = '0'; q.step = '1'; q.placeholder = 'Quantity'; q.setAttribute('aria-label', 'Quantity for this date');
+  line.appendChild(d); line.appendChild(q);
+  row.appendChild(top); row.appendChild(line);
+  $('extraList').appendChild(row);
+  d.addEventListener('input', function(){ var f = formatTyped(d.value); if(f !== d.value) d.value = f; });
+  d.addEventListener('blur', function(){ var p = parseExpiry(d.value); if(p) d.value = p.value; });
+  x.addEventListener('click', function(){ row.remove(); });
+  try{ d.focus(); row.scrollIntoView({ block: 'center', behavior: 'smooth' }); }catch(e){}
+}
+$('addExtraBtn').addEventListener('click', addExtraRow);
+function readExtras(err, primaryKey){
+  var out = [], seen = {}, rows = $('extraList').querySelectorAll('.extra-row'), n = 0;
+  if(primaryKey) seen[primaryKey] = true;
+  for(var i = 0; i < rows.length; i++){
+    var d = rows[i].querySelector('.x-date'), q = rows[i].querySelector('.x-qty');
+    var dv = d.value.trim(), qv = q.value.trim();
+    if(!dv && !qv) continue;
+    n++;
+    var pe2 = parseExpiry(dv);
+    if(!pe2){ fail(err, 'Check the date in "Another expiry date" ' + n + '. Use year and month, like 2026-12.', d); return null; }
+    var qn = parseQty(qv);
+    if(qn === null){ fail(err, 'Enter the quantity for ' + pe2.value + '.', q); return null; }
+    if(seen[pe2.value]){ fail(err, 'The date ' + pe2.value + ' is used twice. Each line needs a different date.', d); return null; }
+    seen[pe2.value] = true;
+    d.value = pe2.value;
+    out.push({ expiry: pe2.value, qty: qn });
+  }
+  return out;
+}
 $('addForm').addEventListener('submit', async function(e){
   e.preventDefault();
   if(saving) return;
@@ -1181,6 +1228,8 @@ $('addForm').addEventListener('submit', async function(e){
     expiry = pe.value;
     $('expiry').value = expiry;
   }
+  var extras = readExtras(err, noE ? '' : expiry);
+  if(extras === null) return;
   err.textContent = '';
   saving = true;
   var btn = $('saveBtn'); btn.disabled = true; btn.textContent = 'Saving…';
@@ -1203,7 +1252,12 @@ $('addForm').addEventListener('submit', async function(e){
         try{ await withTimeout(db.collection('batches').doc(bk).set({ brand: selectedBrand, code: batchVal, expiry: expiry, updatedAt: new Date().toISOString() }), 15000); }catch(e){}
       }
     }
-    toast(r.photoSkipped ? 'Saved ' + name + ', but the photo could not be stored. Open the item to add it again.' : (existing ? 'Updated ' : 'Saved ') + name + ' · ' + fmt(qty));
+    for(var xi = 0; xi < extras.length; xi++){
+      var xe = extras[xi], xid = code ? idFromBarcode(code) + '_' + xe.expiry : null;
+      await saveItem({ id: xid, barcode: code, name: name, qty: xe.qty, expiry: xe.expiry, noExpiry: false, brand: '', batchCode: '', expirySource: 'printed', existing: xid ? items.get(xid) : null, sharePhotoId: r.photoId || null });
+    }
+    if(extras.length) toast('Saved ' + name + ' with ' + (extras.length + 1) + ' expiry dates.');
+    else toast(r.photoSkipped ? 'Saved ' + name + ', but the photo could not be stored. Open the item to add it again.' : (existing ? 'Updated ' : 'Saved ') + name + ' · ' + fmt(qty));
     resetAdd();
     if(code){
       lastSaved = { code: code };
