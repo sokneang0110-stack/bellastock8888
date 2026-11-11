@@ -273,9 +273,10 @@ input:disabled:not(.cal){opacity:.5}
           <div class="chips" id="brandChips" role="group" aria-label="Brand"></div>
           <button type="button" class="btn btn-quiet btn-small" id="brandEditBtn" hidden>Edit brands</button>
           <div class="inline" id="brandAddRow" hidden>
-            <input id="brandNew" type="text" autocomplete="off" placeholder="New brand name" aria-label="New brand name">
+            <input id="brandNew" type="text" autocomplete="off" placeholder="Type the brand name" aria-label="Brand name">
             <button type="button" class="btn btn-small" id="brandAddBtn">Add brand</button>
           </div>
+          <div class="chips" id="brandSuggest" role="group" aria-label="Brand suggestions"></div>
           <div class="inline">
             <input id="batchCode" class="mono" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Batch code" aria-label="Batch code">
             <a class="btn btn-small" id="checkOnline" href="https://checkexp.com/" target="_blank" rel="noopener">Check online</a>
@@ -286,15 +287,15 @@ input:disabled:not(.cal){opacity:.5}
       </details>
 
       <div class="field">
-        <label for="expiry">Expiry date (required)</label>
+        <label for="expiry">Expiry date: year and month (required)</label>
         <div class="inline">
-          <input id="expiry" type="text" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD" maxlength="10">
+          <input id="expiry" type="text" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM" maxlength="10">
           <span class="cal-wrap">
             <span class="icon-btn" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg></span>
             <input type="date" class="cal" id="expiryCal" aria-label="Pick the expiry date from a calendar">
           </span>
         </div>
-        <p class="tiny" id="expiryHint">Type the date, like 20261231, or tap the calendar.</p>
+        <p class="tiny" id="expiryHint">Type year and month, like 202612. The day is not needed.</p>
         <div class="noexp-row"><button type="button" class="chip" id="noExpBtn" aria-pressed="false">No expiration date</button></div>
       </div>
 
@@ -403,13 +404,13 @@ input:disabled:not(.cal){opacity:.5}
       <div class="field">
         <label for="eExpiry">Expiry date (required)</label>
         <div class="inline">
-          <input id="eExpiry" type="text" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD" maxlength="10">
+          <input id="eExpiry" type="text" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM" maxlength="10">
           <span class="cal-wrap">
             <span class="icon-btn" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg></span>
             <input type="date" class="cal" id="eExpiryCal" aria-label="Pick the expiry date from a calendar">
           </span>
         </div>
-        <p class="tiny" id="eExpiryHint">Type the date, like 20261231, or tap the calendar.</p>
+        <p class="tiny" id="eExpiryHint">Type year and month, like 202612. The day is not needed.</p>
         <div class="noexp-row"><button type="button" class="chip" id="eNoExpBtn" aria-pressed="false">No expiration date</button></div>
       </div>
       <p class="err" id="sheetError" role="alert"></p>
@@ -544,6 +545,7 @@ var downloads = {
   }
 };
 window.__photoUrl = function(id){ return urls.get(id) || ''; };
+window.__sheetUrl = 'https://script.google.com/macros/s/AKfycbyh3kOsTohPHk8TxbS8Lr1_aM7kCySacEZ_wFXC5JFspQ4LTW4dK4MOqU3OL73rHeLhRA/exec';
 window.claude = {
   use: async function(name){
     if(name === 'downloads') return downloads;
@@ -621,12 +623,12 @@ function formatTyped(s){
 function parseExpiry(s){
   var d = digitsOf(s), y, m, day;
   if(d.length === 8){ y = Number(d.slice(0, 4)); m = Number(d.slice(4, 6)); day = Number(d.slice(6, 8)); }
-  else if(d.length === 6){ y = Number(d.slice(0, 4)); m = Number(d.slice(4, 6)); day = new Date(y, m, 0).getDate(); }
+  else if(d.length === 6){ y = Number(d.slice(0, 4)); m = Number(d.slice(4, 6)); day = 1; }
   else return null;
   if(y < 2000 || y > 2099 || m < 1 || m > 12 || day < 1) return null;
   var t = new Date(y, m - 1, day);
   if(t.getFullYear() !== y || t.getMonth() !== m - 1 || t.getDate() !== day) return null;
-  return { value: y + '-' + pad2(m) + '-' + pad2(day), monthOnly: d.length === 6 };
+  return { value: y + '-' + pad2(m) + (d.length === 6 ? '' : '-' + pad2(day)), monthOnly: d.length === 6 };
 }
 var noExp = { expiry: false, eExpiry: false };
 var noExpIds = { expiry: ['noExpBtn', 'expiryCal'], eExpiry: ['eNoExpBtn', 'eExpiryCal'] };
@@ -651,16 +653,16 @@ function setupDate(textId, calId, hintId){
   var t = $(textId), c = $(calId), h = $(hintId);
   function hint(){
     if(noExp[textId]){ h.textContent = 'No expiration date for this item. Tap the button again to enter one.'; c.value = ''; return; }
-    if(!t.value){ h.textContent = 'Type the date, like 20261231, or tap the calendar.'; c.value = ''; return; }
+    if(!t.value){ h.textContent = 'Type year and month, like 202612. The day is not needed.'; c.value = ''; return; }
     var p = parseExpiry(t.value);
-    if(!p){ h.textContent = 'Keep typing: year, month, day.'; return; }
-    h.textContent = p.monthOnly ? 'Month only. Using the last day: ' + p.value : 'Date: ' + p.value;
-    c.value = p.value;
+    if(!p){ h.textContent = 'Keep typing: year, then month, like 202612.'; c.value = ''; return; }
+    h.textContent = p.monthOnly ? 'Year and month: ' + p.value + '. The day is not needed.' : 'Date: ' + p.value;
+    c.value = p.monthOnly ? '' : p.value;
   }
   t.addEventListener('input', function(){ var f = formatTyped(t.value); if(f !== t.value) t.value = f; hint(); });
   t.addEventListener('blur', function(){
     var p = parseExpiry(t.value);
-    if(p){ t.value = p.value; hint(); if(p.monthOnly) h.textContent = 'Month only. Using the last day: ' + p.value; }
+    if(p){ t.value = p.value; hint(); }
   });
   c.addEventListener('change', function(){ if(c.value){ t.value = c.value; hint(); } });
   $(noExpIds[textId][0]).addEventListener('click', function(){
@@ -834,8 +836,56 @@ function updateBatchTag(){
   var tag = $('batchTag'), t = [selectedBrand, $('batchCode').value.trim()].filter(Boolean).join(' · ');
   tag.textContent = t; tag.hidden = !t;
 }
+var sheetUrl = window.__sheetUrl || '', batchSeq = 0, batchTimer = null, lookups = new Map();
+function lookupFetch(params){
+  var u = sheetUrl + (sheetUrl.indexOf('?') < 0 ? '?' : '&') + params;
+  return withTimeout(fetch(u).then(function(r){ return r.json(); }), 30000);
+}
+function ymAdd(y, m, add){ var t = y * 12 + (m - 1) + add; return { y: Math.floor(t / 12), m: (t % 12) + 1 }; }
+var MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+function expiryFromLookup(r){
+  if(!r || !r.ok || !r.year || !r.month || !r.shelf) return '';
+  var e = ymAdd(r.year, r.month, r.shelf);
+  if(r.day > 0){
+    var last = new Date(e.y, e.m, 0).getDate();
+    return e.y + '-' + pad2(e.m) + '-' + pad2(Math.min(r.day, last));
+  }
+  return e.y + '-' + pad2(e.m);
+}
+function showLookup(r){
+  var st = $('batchStatus'), exp = $('expiry');
+  if(r && r.ok){
+    var made = MONTH_NAMES[r.month - 1] + ' ' + r.year;
+    var ev = expiryFromLookup(r);
+    if(!ev){ setStatus(st, 'Made ' + made + '. The shelf life is not known, so type the expiry in the Expiry box.', 'warn'); return; }
+    if(!noExp.expiry && (!exp.value || exp.value === lastBatchExpiry)){
+      setExpiry('expiry', ev); lastBatchExpiry = ev;
+      setStatus(st, 'Made ' + made + '. Shelf life ' + r.shelf + ' months. Expiry ' + ev + ' filled in. This is an estimate, check the box if you can.', 'good');
+    } else {
+      setStatus(st, 'Made ' + made + '. Shelf life ' + r.shelf + ' months. Estimated expiry ' + ev + '. The Expiry box already has a date, so it was not changed.', '');
+    }
+    return;
+  }
+  var why = r && r.reason;
+  if(why === 'not_found') setStatus(st, 'checkexp.com does not know this batch (check the brand name and the code). Type the date printed on the box.', 'warn');
+  else if(why === 'site_changed') setStatus(st, 'The batch checker changed and cannot be read. Tap Check online, then type the date.', 'warn');
+  else setStatus(st, 'Could not get the date right now. Tap Check online, or type the date.', 'warn');
+}
+function requestBatch(brand, code, my){
+  var key = batchKey(brand, code);
+  if(lookups.has(key)){ showLookup(lookups.get(key)); return; }
+  lookupFetch('action=batch&brand=' + encodeURIComponent(brand) + '&code=' + encodeURIComponent(code)).then(function(r){
+    if(my !== batchSeq) return;
+    if(r && (r.ok || r.reason === 'not_found')) lookups.set(key, r);
+    showLookup(r);
+  }, function(){
+    if(my !== batchSeq) return;
+    showLookup(null);
+  });
+}
 function updateBatchLookup(){
   updateBatchTag();
+  clearTimeout(batchTimer); batchSeq++;
   var st = $('batchStatus'), code = $('batchCode').value.trim(), exp = $('expiry');
   if(!code){
     if(lastBatchExpiry && exp.value === lastBatchExpiry) setExpiry('expiry', '');
@@ -851,12 +901,41 @@ function updateBatchLookup(){
   } else {
     if(lastBatchExpiry && exp.value === lastBatchExpiry) setExpiry('expiry', '');
     lastBatchExpiry = '';
-    setStatus(st, 'New batch. Tap Check online, read the date there, then type it in the Expiry box.', '');
+    if(!sheetUrl){
+      setStatus(st, 'New batch. Tap Check online, read the date there, then type it in the Expiry box.', '');
+    } else if(code.length < 3){
+      setStatus(st, 'Keep typing the batch code.', '');
+    } else {
+      setStatus(st, 'Checking the batch code…', '');
+      var my = batchSeq, br = selectedBrand;
+      batchTimer = setTimeout(function(){ requestBatch(br, code, my); }, 700);
+    }
   }
 }
+var suggestSeq = 0, suggestTimer = null;
+function runSuggest(){
+  var q = $('brandNew').value.trim(), box = $('brandSuggest');
+  var my = ++suggestSeq;
+  if(q.length < 2 || !sheetUrl){ box.replaceChildren(); return; }
+  lookupFetch('action=brands&q=' + encodeURIComponent(q)).then(function(r){
+    if(my !== suggestSeq) return;
+    var frag = document.createDocumentFragment();
+    ((r && r.brands) || []).forEach(function(n){
+      var c = el('button', 'chip', n); c.type = 'button'; c.dataset.name = n; frag.appendChild(c);
+    });
+    box.replaceChildren(frag);
+  }, function(){ if(my === suggestSeq) box.replaceChildren(); });
+}
+$('brandNew').addEventListener('input', function(){ clearTimeout(suggestTimer); suggestTimer = setTimeout(runSuggest, 350); });
+$('brandSuggest').addEventListener('click', function(e){
+  var b = e.target.closest ? e.target.closest('.chip') : null;
+  if(!b || !b.dataset.name) return;
+  $('brandNew').value = b.dataset.name; addBrand();
+});
 async function addBrand(){
   var name = $('brandNew').value.trim();
   if(!name) return;
+  suggestSeq++; $('brandSuggest').replaceChildren();
   if(!db){ toast('Saving is not available. Turn off private browsing, then reload.'); return; }
   try{
     await db.collection('brands').doc(keyOf(name)).set({ name: name, createdAt: new Date().toISOString() });
@@ -1097,7 +1176,7 @@ $('addForm').addEventListener('submit', async function(e){
   var noE = noExp.expiry, expiry = '';
   if(!noE){
     var pe = parseExpiry($('expiry').value);
-    if(!pe){ fail(err, $('expiry').value.trim() ? 'Check the expiry date. Use year, month, day, like 2026-12-31.' : 'Enter the expiry date, or tap "No expiration date".', $('expiry')); return; }
+    if(!pe){ fail(err, $('expiry').value.trim() ? 'Check the expiry date. Use year and month, like 2026-12.' : 'Enter the expiry date, or tap "No expiration date".', $('expiry')); return; }
     expiry = pe.value;
     $('expiry').value = expiry;
   }
@@ -1138,7 +1217,7 @@ $('addForm').addEventListener('submit', async function(e){
 });
 
 /* list screen */
-function localDate(s){ var p = String(s).split('-'); return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])); }
+function localDate(s){ var p = String(s).split('-'); return p.length < 3 ? new Date(Number(p[0]), Number(p[1]), 0) : new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])); }
 function expiryState(s){
   if(!s) return '';
   var d = localDate(s);
@@ -1288,7 +1367,7 @@ $('sheetForm').addEventListener('submit', async function(e){
   var noE = noExp.eExpiry, expiry = '';
   if(!noE){
     var pe = parseExpiry($('eExpiry').value);
-    if(!pe){ fail(err, $('eExpiry').value.trim() ? 'Check the expiry date. Use year, month, day, like 2026-12-31.' : 'Enter the expiry date, or tap "No expiration date".', $('eExpiry')); return; }
+    if(!pe){ fail(err, $('eExpiry').value.trim() ? 'Check the expiry date. Use year and month, like 2026-12.' : 'Enter the expiry date, or tap "No expiration date".', $('eExpiry')); return; }
     expiry = pe.value;
     $('eExpiry').value = expiry;
   }
