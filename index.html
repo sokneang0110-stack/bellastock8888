@@ -314,6 +314,21 @@ input:disabled:not(.cal){opacity:.5}
   <!-- LIST -->
   <section id="view-list" aria-labelledby="listTitle" hidden>
     <h2 class="h2" id="listTitle">Item list</h2>
+    <details class="batch" id="syncBox">
+      <summary class="batch-sum">
+        <span class="batch-text"><span class="batch-title">Back up to Google Sheet</span><span class="tiny" id="syncTag">Not set up</span></span>
+        <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </summary>
+      <div class="batch-body">
+        <p class="tiny">Every item you save, change or delete is also sent to your Google Sheet. Photos are not sent. Every phone that uses the same web address adds to the same sheet.</p>
+        <div class="inline">
+          <input id="syncUrl" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the web app address" aria-label="Google Sheet web app address">
+          <button type="button" class="btn btn-small" id="syncSave">Save</button>
+        </div>
+        <button type="button" class="btn btn-small" id="syncAll">Send everything now</button>
+        <p class="status" id="syncStatus" role="status"></p>
+      </div>
+    </details>
     <div class="toolbar">
       <input class="search" id="search" type="search" placeholder="Search name or barcode" autocomplete="off" aria-label="Search items">
       <button type="button" class="btn btn-small" id="findBtn">Scan to find</button>
@@ -479,11 +494,13 @@ function collection(n){
           var tx = idb.transaction(n, 'readwrite'); tx.objectStore(n).put(v, id);
           await done(tx);
           mem[n].set(id, v); notify(n);
+          if(n === 'items' && window.__syncHook) window.__syncHook('upsert', id, v);
         },
         delete: async function(){
           var tx = idb.transaction(n, 'readwrite'); tx.objectStore(n).delete(id);
           await done(tx);
           mem[n].delete(id); notify(n);
+          if(n === 'items' && window.__syncHook) window.__syncHook('delete', id);
         }
       };
     },
@@ -1413,4 +1430,70 @@ init();
 })();
 </script>
 
+<script>
+(function(){
+'use strict';
+var K_URL = 'stockroom-sync-url', K_Q = 'stockroom-sync-queue', K_DEV = 'stockroom-phone';
+function get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+function put(k, v){ try{ if(v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); }catch(e){} }
+var dev = get(K_DEV); if(!dev){ dev = 'Phone-' + Math.random().toString(36).slice(2, 6).toUpperCase(); put(K_DEV, dev); }
+function $(id){ return document.getElementById(id); }
+function queue(){ try{ return JSON.parse(get(K_Q) || '[]'); }catch(e){ return []; } }
+function setQ(q){ put(K_Q, JSON.stringify(q)); }
+function say(text, kind){ var s = $('syncStatus'); s.textContent = text; s.setAttribute('data-kind', kind || ''); }
+function tag(){ var u = get(K_URL), n = queue().length; $('syncTag').textContent = !u ? 'Not set up' : (n ? n + ' waiting to send' : 'On'); }
+function rowOf(id, v){
+  return { id: id, barcode: v.barcode || '', name: v.name || '', qty: v.qty, expiry: v.expiry || '', noExpiry: !!v.noExpiry, brand: v.brand || '', batchCode: v.batchCode || '', expirySource: v.expirySource || '', updatedAt: v.updatedAt || '' };
+}
+var busy = false;
+async function flush(){
+  var url = get(K_URL);
+  if(!url){ tag(); return; }
+  if(busy) return;
+  var q = queue();
+  if(!q.length){ say('Everything is already in your sheet.', 'good'); tag(); return; }
+  busy = true;
+  try{
+    while(q.length){
+      var batch = q.slice(0, 80);
+      await fetch(url, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ phone: dev, ops: batch }) });
+      q = q.slice(batch.length); setQ(q); tag();
+    }
+    say('Sent to your sheet at ' + new Date().toLocaleTimeString() + '. Open the sheet to check.', 'good');
+  }catch(e){ say('No internet right now. It will send when you are back online.', 'bad'); }
+  busy = false; tag();
+}
+window.__syncHook = function(op, id, v){
+  if(!get(K_URL)) return;
+  var q = queue();
+  q.push(op === 'delete' ? { op: 'delete', id: id } : { op: 'upsert', row: rowOf(id, v) });
+  setQ(q); tag(); flush();
+};
+async function sendAll(){
+  if(!get(K_URL)){ say('Paste the web app address first.', 'bad'); return; }
+  var db = await window.claude.use('db');
+  if(!db){ say('Could not read the saved items on this phone.', 'bad'); return; }
+  var all = await new Promise(function(res){
+    var un = null, got = false;
+    un = db.collection('items').onSnapshot(function(snap){ if(got) return; got = true; res(snap.docs.map(function(d){ return rowOf(d.id, d.data()); })); setTimeout(function(){ if(un) un(); }, 0); });
+  });
+  var q = queue();
+  var have = {}; q.forEach(function(o){ if(o.op === 'upsert') have[o.row.id] = true; });
+  all.forEach(function(r){ if(!have[r.id]) q.push({ op: 'upsert', row: r }); });
+  setQ(q); tag();
+  if(!all.length){ say('There are no items on this phone yet.', ''); return; }
+  say('Sending ' + all.length + ' items…', ''); flush();
+}
+$('syncSave').addEventListener('click', function(){
+  var u = $('syncUrl').value.trim();
+  if(!u){ put(K_URL, null); say('Backup is turned off.', ''); tag(); return; }
+  if(!/^https:\/\/script\.google\.com\/macros\/s\/[^\s]+\/exec$/.test(u)){ say('That does not look right. It should start with https://script.google.com/macros/s/ and end with /exec', 'bad'); return; }
+  put(K_URL, u); say('Saved. Sending your items…', ''); tag(); sendAll();
+});
+$('syncAll').addEventListener('click', sendAll);
+window.addEventListener('online', flush);
+var cur = get(K_URL); if(cur){ $('syncUrl').value = cur; setTimeout(flush, 1500); }
+tag();
+})();
+</script>
 </html>
