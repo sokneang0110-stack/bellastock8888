@@ -320,12 +320,12 @@ input:disabled:not(.cal){opacity:.5}
         <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
       </summary>
       <div class="batch-body">
-        <p class="tiny">Every item you save, change or delete is also sent to your Google Sheet. Photos are not sent. Every phone that uses the same web address adds to the same sheet.</p>
+        <p class="tiny">Every item you save, change or delete is sent to your Google Sheet, and every phone that uses the same web address shows the same items. Photos stay on the phone that took them.</p>
         <div class="inline">
           <input id="syncUrl" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the web app address" aria-label="Google Sheet web app address">
           <button type="button" class="btn btn-small" id="syncSave">Save</button>
         </div>
-        <button type="button" class="btn btn-small" id="syncAll">Send everything now</button>
+        <button type="button" class="btn btn-small" id="syncAll">Sync now</button>
         <p class="status" id="syncStatus" role="status"></p>
       </div>
     </details>
@@ -494,13 +494,13 @@ function collection(n){
           var tx = idb.transaction(n, 'readwrite'); tx.objectStore(n).put(v, id);
           await done(tx);
           mem[n].set(id, v); notify(n);
-          if(n === 'items' && window.__syncHook) window.__syncHook('upsert', id, v);
+          if(n === 'items' && window.__syncHook && !window.__syncMute) window.__syncHook('upsert', id, v);
         },
         delete: async function(){
           var tx = idb.transaction(n, 'readwrite'); tx.objectStore(n).delete(id);
           await done(tx);
           mem[n].delete(id); notify(n);
-          if(n === 'items' && window.__syncHook) window.__syncHook('delete', id);
+          if(n === 'items' && window.__syncHook && !window.__syncMute) window.__syncHook('delete', id);
         }
       };
     },
@@ -1466,7 +1466,7 @@ async function flush(){
 window.__syncHook = function(op, id, v){
   if(!get(K_URL)) return;
   var q = queue();
-  q.push(op === 'delete' ? { op: 'delete', id: id } : { op: 'upsert', row: rowOf(id, v) });
+  q.push(op === 'delete' ? { op: 'delete', id: id, at: new Date().toISOString() } : { op: 'upsert', row: rowOf(id, v) });
   setQ(q); tag(); flush();
 };
 async function sendAll(){
@@ -1481,18 +1481,70 @@ async function sendAll(){
   var have = {}; q.forEach(function(o){ if(o.op === 'upsert') have[o.row.id] = true; });
   all.forEach(function(r){ if(!have[r.id]) q.push({ op: 'upsert', row: r }); });
   setQ(q); tag();
-  if(!all.length){ say('There are no items on this phone yet.', ''); return; }
-  say('Sending ' + all.length + ' items…', ''); flush();
+  if(!all.length){ return; }
+  say('Sending ' + all.length + ' items…', ''); await flush();
 }
+var pulling = false;
+async function readItems(db){
+  return await new Promise(function(res){
+    var un = null, got = false;
+    un = db.collection('items').onSnapshot(function(snap){ if(got) return; got = true; var m = {}; snap.docs.forEach(function(d){ m[d.id] = d.data(); }); res(m); setTimeout(function(){ if(un) un(); }, 0); });
+  });
+}
+async function pull(){
+  var url = get(K_URL);
+  if(!url || pulling) return;
+  pulling = true;
+  try{
+    if(queue().length) await flush();
+    var res = await fetch(url + '?action=list', { cache: 'no-store' });
+    var data = await res.json();
+    if(!data || !data.rows) throw new Error('bad');
+    var db = await window.claude.use('db');
+    if(!db) throw new Error('nodb');
+    var local = await readItems(db), col = db.collection('items'), added = 0, removed = 0;
+    window.__syncMute = true;
+    for(var i = 0; i < data.rows.length; i++){
+      var r = data.rows[i], l = local[r.id], ru = String(r.updatedAt || '');
+      if(r.deleted){
+        if(l && ru >= String(l.updatedAt || '')){ await col.doc(r.id).delete(); removed++; }
+        continue;
+      }
+      if(l && String(l.updatedAt || '') >= ru) continue;
+      await col.doc(r.id).set({
+        name: r.name || '', barcode: r.barcode || '', qty: Number(r.qty) || 0, expiry: r.expiry || '', noExpiry: !!r.noExpiry,
+        brand: r.brand || '', batchCode: r.batchCode || '', expirySource: r.expirySource || '',
+        updatedAt: ru || new Date().toISOString(), createdAt: (l && l.createdAt) || ru || new Date().toISOString(), photoId: (l && l.photoId) || null
+      });
+      added++;
+    }
+    window.__syncMute = false;
+    var remote = {}; data.rows.forEach(function(r){ remote[r.id] = r; });
+    var q = queue(), pushed = 0;
+    Object.keys(local).forEach(function(id){
+      var l = local[id], rr = remote[id];
+      if(!rr || String(l.updatedAt || '') > String(rr.updatedAt || '')){ q.push({ op: 'upsert', row: rowOf(id, l) }); pushed++; }
+    });
+    if(pushed){ setQ(q); tag(); await flush(); }
+    say('Synced at ' + new Date().toLocaleTimeString() + (added || removed || pushed ? '. ' + added + ' updated and ' + removed + ' removed on this phone, ' + pushed + ' sent to the sheet.' : '. Everything matches your sheet.'), 'good');
+  }catch(e){
+    say('Could not read the sheet. Check the address and your internet.', 'bad');
+  }finally{
+    window.__syncMute = false; pulling = false; tag();
+  }
+}
+async function syncNow(){ if(!get(K_URL)){ say('Paste the web app address first.', 'bad'); return; } await pull(); }
 $('syncSave').addEventListener('click', function(){
   var u = $('syncUrl').value.trim();
   if(!u){ put(K_URL, null); say('Backup is turned off.', ''); tag(); return; }
   if(!/^https:\/\/script\.google\.com\/macros\/s\/[^\s]+\/exec$/.test(u)){ say('That does not look right. It should start with https://script.google.com/macros/s/ and end with /exec', 'bad'); return; }
-  put(K_URL, u); say('Saved. Sending your items…', ''); tag(); sendAll();
+  put(K_URL, u); say('Saved. Syncing your items…', ''); tag(); syncNow();
 });
-$('syncAll').addEventListener('click', sendAll);
+$('syncAll').addEventListener('click', syncNow);
+document.addEventListener('visibilitychange', function(){ if(!document.hidden) pull(); });
+setInterval(function(){ if(!document.hidden) pull(); }, 30000);
 window.addEventListener('online', flush);
-var cur = get(K_URL); if(cur){ $('syncUrl').value = cur; setTimeout(flush, 1500); }
+var cur = get(K_URL); if(cur){ $('syncUrl').value = cur; setTimeout(function(){ flush().then(pull); }, 1500); }
 tag();
 })();
 </script>
