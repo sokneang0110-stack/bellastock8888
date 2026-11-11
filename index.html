@@ -154,7 +154,13 @@ a.btn{text-decoration:none}
 .chev{flex:none;color:var(--muted);transition:transform .15s}
 .batch[open] .chev{transform:rotate(180deg)}
 .batch-body{display:flex;flex-direction:column;gap:10px;padding:0 12px 12px}
-#brandEditBtn{align-self:flex-start}
+.combo{position:relative}
+#brandInput{scroll-margin-top:84px}
+.drop{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:20;max-height:min(260px,38vh);overflow-y:auto;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.18)}
+.drop .opt{display:block;width:100%;min-height:44px;padding:10px 14px;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.drop .opt:last-child{border-bottom:0}
+.drop .opt:hover,.drop .opt:focus-visible{background:var(--surface-2)}
+.drop .note{padding:10px 14px;color:var(--muted);font-size:14px}
 @media (prefers-reduced-motion: reduce){.chev{transition:none}}
 .batch-title{font-weight:600;font-size:15px}
 .batch input[type="text"]{width:100%;height:48px;padding:0 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);color:var(--ink);font-size:16px}
@@ -270,18 +276,15 @@ input:disabled:not(.cal){opacity:.5}
           <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
         </summary>
         <div class="batch-body">
-          <div class="chips" id="brandChips" role="group" aria-label="Brand"></div>
-          <button type="button" class="btn btn-quiet btn-small" id="brandEditBtn" hidden>Edit brands</button>
-          <div class="inline" id="brandAddRow" hidden>
-            <input id="brandNew" type="text" autocomplete="off" placeholder="Type the brand name" aria-label="Brand name">
-            <button type="button" class="btn btn-small" id="brandAddBtn">Add brand</button>
+          <div class="combo">
+            <input id="brandInput" type="text" autocomplete="off" autocapitalize="words" spellcheck="false" placeholder="Brand: type the first letter" aria-label="Brand">
+            <div class="drop" id="brandDrop" role="listbox" aria-label="Brand list" hidden></div>
           </div>
-          <div class="chips" id="brandSuggest" role="group" aria-label="Brand suggestions"></div>
           <div class="inline">
             <input id="batchCode" class="mono" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Batch code" aria-label="Batch code">
-            <a class="btn btn-small" id="checkOnline" href="https://checkexp.com/" target="_blank" rel="noopener">Check online</a>
+            <button type="button" class="btn btn-small" id="searchBtn">Search</button>
           </div>
-          <p class="status" id="batchStatus" role="status" data-kind="">Choose a brand, then type the batch code.</p>
+          <p class="status" id="batchStatus" role="status" data-kind="">Choose the brand, type the batch code, then tap Search.</p>
           <p class="tiny">checkexp.com estimates dates from batch codes and can be wrong. Use the printed date when the box has one.</p>
         </div>
       </details>
@@ -572,7 +575,7 @@ var saving = false;
 var addPhoto = { blob: null, url: null };
 var sheetPhoto = { blob: null, url: null };
 var matchId = null, autoName = '', photoLot = null, lastSaved = null;
-var brands = new Map(), batches = new Map(), selectedBrand = '', brandEditMode = false, lastBatchExpiry = '';
+var batches = new Map(), selectedBrand = '', lastBatchExpiry = '';
 var editId = null;
 var pendingCode = '';
 var toastTimer = 0;
@@ -817,26 +820,11 @@ function keyOf(s){
   return ascii + '-' + (h >>> 0).toString(36);
 }
 function batchKey(brand, code){ return keyOf(brand) + '_' + keyOf(code); }
-function renderChips(){
-  var box = $('brandChips');
-  var frag = document.createDocumentFragment();
-  Array.from(brands.values()).sort(function(a, b){ return a.name.localeCompare(b.name); }).forEach(function(b){
-    var c = el('button', 'chip' + (brandEditMode ? ' del' : ''), b.name);
-    c.type = 'button'; c.dataset.key = b.key;
-    c.setAttribute('aria-pressed', (!brandEditMode && selectedBrand === b.name) ? 'true' : 'false');
-    frag.appendChild(c);
-  });
-  var add = el('button', 'chip add', '+ Brand'); add.type = 'button'; add.id = 'brandAddChip';
-  frag.appendChild(add);
-  box.replaceChildren(frag);
-  $('brandEditBtn').textContent = brandEditMode ? 'Done' : 'Edit brands';
-  $('brandEditBtn').hidden = brands.size === 0;
-}
 function updateBatchTag(){
   var tag = $('batchTag'), t = [selectedBrand, $('batchCode').value.trim()].filter(Boolean).join(' · ');
   tag.textContent = t; tag.hidden = !t;
 }
-var sheetUrl = window.__sheetUrl || '', batchSeq = 0, batchTimer = null, lookups = new Map();
+var sheetUrl = window.__sheetUrl || '', batchSeq = 0, lookups = new Map();
 function lookupFetch(params){
   var u = sheetUrl + (sheetUrl.indexOf('?') < 0 ? '?' : '&') + params;
   return withTimeout(fetch(u).then(function(r){ return r.json(); }), 30000);
@@ -852,14 +840,18 @@ function expiryFromLookup(r){
   }
   return e.y + '-' + pad2(e.m);
 }
+function fillBatchExpiry(ev){
+  var exp = $('expiry');
+  if(!noExp.expiry && (!exp.value || exp.value === lastBatchExpiry)){ setExpiry('expiry', ev); lastBatchExpiry = ev; return true; }
+  return false;
+}
 function showLookup(r){
-  var st = $('batchStatus'), exp = $('expiry');
+  var st = $('batchStatus');
   if(r && r.ok){
-    var made = MONTH_NAMES[r.month - 1] + ' ' + r.year;
+    var made = (r.day > 0 ? r.day + ' ' : '') + MONTH_NAMES[r.month - 1] + ' ' + r.year;
     var ev = expiryFromLookup(r);
     if(!ev){ setStatus(st, 'Made ' + made + '. The shelf life is not known, so type the expiry in the Expiry box.', 'warn'); return; }
-    if(!noExp.expiry && (!exp.value || exp.value === lastBatchExpiry)){
-      setExpiry('expiry', ev); lastBatchExpiry = ev;
+    if(fillBatchExpiry(ev)){
       setStatus(st, 'Made ' + made + '. Shelf life ' + r.shelf + ' months. Expiry ' + ev + ' filled in. This is an estimate, check the box if you can.', 'good');
     } else {
       setStatus(st, 'Made ' + made + '. Shelf life ' + r.shelf + ' months. Estimated expiry ' + ev + '. The Expiry box already has a date, so it was not changed.', '');
@@ -867,110 +859,120 @@ function showLookup(r){
     return;
   }
   var why = r && r.reason;
-  if(why === 'not_found') setStatus(st, 'checkexp.com does not know this batch (check the brand name and the code). Type the date printed on the box.', 'warn');
-  else if(why === 'site_changed') setStatus(st, 'The batch checker changed and cannot be read. Tap Check online, then type the date.', 'warn');
-  else setStatus(st, 'Could not get the date right now. Tap Check online, or type the date.', 'warn');
+  if(why === 'not_found') setStatus(st, 'No date found for this batch. Check the brand and the code, or type the date printed on the box.', 'warn');
+  else if(why === 'site_changed') setStatus(st, 'The batch checker changed and cannot be read. Type the date printed on the box.', 'warn');
+  else setStatus(st, 'Could not get the date right now. Try Search again, or type the date.', 'warn');
 }
-function requestBatch(brand, code, my){
-  var key = batchKey(brand, code);
-  if(lookups.has(key)){ showLookup(lookups.get(key)); return; }
-  lookupFetch('action=batch&brand=' + encodeURIComponent(brand) + '&code=' + encodeURIComponent(code)).then(function(r){
-    if(my !== batchSeq) return;
-    if(r && (r.ok || r.reason === 'not_found')) lookups.set(key, r);
-    showLookup(r);
-  }, function(){
-    if(my !== batchSeq) return;
-    showLookup(null);
+/* brand list: one field, pick from the list */
+var brandList = [], brandFetched = false;
+try{ var cached = JSON.parse(localStorage.getItem('stockroom-brands') || '[]'); if(Array.isArray(cached)) brandList = cached; }catch(e){}
+function plainText(s){ return String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase(); }
+function loadBrands(){
+  if(brandFetched || !sheetUrl) return;
+  brandFetched = true;
+  lookupFetch('action=brands&all=1').then(function(r){
+    if(r && r.brands && r.brands.length){
+      brandList = r.brands;
+      try{ localStorage.setItem('stockroom-brands', JSON.stringify(brandList)); }catch(e){}
+      showDrop();
+    } else brandFetched = false;
+  }, function(){ brandFetched = false; });
+}
+function matchBrands(q){
+  var n = plainText(q.trim()), starts = [], inside = [];
+  if(!n) return [];
+  brandList.forEach(function(b){
+    var i = plainText(b).indexOf(n);
+    if(i === 0) starts.push(b); else if(i > 0 && n.length >= 2) inside.push(b);
   });
+  return starts.concat(inside);
 }
+function hideDrop(){ $('brandDrop').hidden = true; }
+function showDrop(){
+  var box = $('brandDrop'), q = $('brandInput').value.trim();
+  if(!q || (selectedBrand && selectedBrand === q) || document.activeElement !== $('brandInput')){ box.hidden = true; return; }
+  var found = matchBrands(q), frag = document.createDocumentFragment();
+  if(!found.length){
+    frag.appendChild(el('div', 'note', brandList.length ? 'No brand found. Check the spelling.' : (sheetUrl ? 'Loading the brand list…' : 'The brand list is not available here.')));
+  } else {
+    found.slice(0, 80).forEach(function(n){
+      var o = el('button', 'opt', n); o.type = 'button'; o.dataset.name = n; o.setAttribute('role', 'option'); frag.appendChild(o);
+    });
+  }
+  box.replaceChildren(frag); box.scrollTop = 0; box.hidden = false;
+}
+function chooseBrand(name){
+  selectedBrand = name; $('brandInput').value = name; hideDrop();
+  updateBatchLookup(); $('batchCode').focus();
+}
+function resolveBrand(){
+  if(selectedBrand) return selectedBrand;
+  var t = plainText($('brandInput').value.trim());
+  if(!t) return '';
+  var exact = brandList.filter(function(b){ return plainText(b) === t; });
+  if(exact.length === 1){ selectedBrand = exact[0]; $('brandInput').value = exact[0]; updateBatchTag(); return selectedBrand; }
+  return '';
+}
+function resetBrand(){ selectedBrand = ''; $('brandInput').value = ''; hideDrop(); }
+$('brandInput').addEventListener('focus', function(){
+  loadBrands(); showDrop();
+  setTimeout(function(){ try{ $('brandInput').scrollIntoView({ block: 'start', behavior: 'smooth' }); }catch(e){} }, 250);
+});
+$('brandInput').addEventListener('input', function(){
+  loadBrands();
+  if(selectedBrand && selectedBrand !== $('brandInput').value){ selectedBrand = ''; updateBatchLookup(); }
+  showDrop();
+});
+$('brandInput').addEventListener('keydown', function(e){
+  if(e.key !== 'Enter') return;
+  e.preventDefault();
+  var f = matchBrands($('brandInput').value);
+  if(f.length === 1) chooseBrand(f[0]);
+});
+$('brandDrop').addEventListener('click', function(e){
+  var b = e.target.closest ? e.target.closest('.opt') : null;
+  if(b && b.dataset.name) chooseBrand(b.dataset.name);
+});
+$('brandDrop').addEventListener('mousedown', function(e){ e.preventDefault(); });
+$('brandInput').addEventListener('blur', function(){ hideDrop(); });
+document.addEventListener('click', function(e){
+  if(!(e.target.closest && e.target.closest('.combo'))) hideDrop();
+});
+
+/* batch code: Search */
 function updateBatchLookup(){
   updateBatchTag();
-  clearTimeout(batchTimer); batchSeq++;
-  var st = $('batchStatus'), code = $('batchCode').value.trim(), exp = $('expiry');
-  if(!code){
-    if(lastBatchExpiry && exp.value === lastBatchExpiry) setExpiry('expiry', '');
-    lastBatchExpiry = '';
-    setStatus(st, selectedBrand ? 'Type the batch code.' : 'Choose a brand, then type the batch code.', '');
-    return;
-  }
-  if(!selectedBrand){ setStatus(st, 'Choose a brand first.', 'warn'); return; }
-  var m = batches.get(batchKey(selectedBrand, code));
+  batchSeq++; $('searchBtn').disabled = false;
+  if(lastBatchExpiry && $('expiry').value === lastBatchExpiry) setExpiry('expiry', '');
+  lastBatchExpiry = '';
+  setStatus($('batchStatus'), 'Choose the brand, type the batch code, then tap Search.', '');
+}
+function doSearch(){
+  var st = $('batchStatus'), code = $('batchCode').value.trim(), br = resolveBrand();
+  if(!br){ setStatus(st, 'Type the brand and tap its name in the list.', 'warn'); $('brandInput').focus(); return; }
+  if(!code){ setStatus(st, 'Type the batch code, then tap Search.', 'warn'); $('batchCode').focus(); return; }
+  var key = batchKey(br, code), m = batches.get(key);
   if(m && m.expiry){
-    if(!noExp.expiry && (!exp.value || exp.value === lastBatchExpiry)){ setExpiry('expiry', m.expiry); lastBatchExpiry = m.expiry; }
-    setStatus(st, 'Known batch. Expiry ' + m.expiry + ' filled in.', 'good');
-  } else {
-    if(lastBatchExpiry && exp.value === lastBatchExpiry) setExpiry('expiry', '');
-    lastBatchExpiry = '';
-    if(!sheetUrl){
-      setStatus(st, 'New batch. Tap Check online, read the date there, then type it in the Expiry box.', '');
-    } else if(code.length < 3){
-      setStatus(st, 'Keep typing the batch code.', '');
-    } else {
-      setStatus(st, 'Checking the batch code…', '');
-      var my = batchSeq, br = selectedBrand;
-      batchTimer = setTimeout(function(){ requestBatch(br, code, my); }, 700);
-    }
-  }
-}
-var suggestSeq = 0, suggestTimer = null;
-function runSuggest(){
-  var q = $('brandNew').value.trim(), box = $('brandSuggest');
-  var my = ++suggestSeq;
-  if(q.length < 2 || !sheetUrl){ box.replaceChildren(); return; }
-  lookupFetch('action=brands&q=' + encodeURIComponent(q)).then(function(r){
-    if(my !== suggestSeq) return;
-    var frag = document.createDocumentFragment();
-    ((r && r.brands) || []).forEach(function(n){
-      var c = el('button', 'chip', n); c.type = 'button'; c.dataset.name = n; frag.appendChild(c);
-    });
-    box.replaceChildren(frag);
-  }, function(){ if(my === suggestSeq) box.replaceChildren(); });
-}
-$('brandNew').addEventListener('input', function(){ clearTimeout(suggestTimer); suggestTimer = setTimeout(runSuggest, 350); });
-$('brandSuggest').addEventListener('click', function(e){
-  var b = e.target.closest ? e.target.closest('.chip') : null;
-  if(!b || !b.dataset.name) return;
-  $('brandNew').value = b.dataset.name; addBrand();
-});
-async function addBrand(){
-  var name = $('brandNew').value.trim();
-  if(!name) return;
-  suggestSeq++; $('brandSuggest').replaceChildren();
-  if(!db){ toast('Saving is not available. Turn off private browsing, then reload.'); return; }
-  try{
-    await db.collection('brands').doc(keyOf(name)).set({ name: name, createdAt: new Date().toISOString() });
-    selectedBrand = name;
-    $('brandNew').value = ''; $('brandAddRow').hidden = true;
-    renderChips(); updateBatchLookup();
-  }catch(ex){ toast(describeError(ex)); }
-}
-$('brandChips').addEventListener('click', async function(e){
-  var b = e.target.closest ? e.target.closest('.chip') : null;
-  if(!b) return;
-  if(b.id === 'brandAddChip'){ $('brandAddRow').hidden = false; $('brandNew').focus(); return; }
-  var br = brands.get(b.dataset.key);
-  if(!br) return;
-  if(brandEditMode){
-    if(!db) return;
-    try{
-      await db.collection('brands').doc(br.key).delete();
-      if(selectedBrand === br.name){ selectedBrand = ''; updateBatchLookup(); }
-    }catch(ex){ toast('Could not remove the brand. Try again.'); }
+    if(fillBatchExpiry(m.expiry)) setStatus(st, 'Known batch. Expiry ' + m.expiry + ' filled in.', 'good');
+    else setStatus(st, 'Known batch. Expiry ' + m.expiry + '. The Expiry box already has a date, so it was not changed.', '');
     return;
   }
-  selectedBrand = (selectedBrand === br.name) ? '' : br.name;
-  renderChips(); updateBatchLookup();
-});
-$('brandEditBtn').addEventListener('click', function(){ brandEditMode = !brandEditMode; renderChips(); });
-$('brandAddBtn').addEventListener('click', addBrand);
-$('brandNew').addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); addBrand(); } });
+  if(lookups.has(key)){ showLookup(lookups.get(key)); return; }
+  if(!sheetUrl){ setStatus(st, 'Search is not available here. Type the date printed on the box.', 'warn'); return; }
+  var my = ++batchSeq, btn = $('searchBtn');
+  setStatus(st, 'Searching…', ''); btn.disabled = true;
+  lookupFetch('action=batch&brand=' + encodeURIComponent(br) + '&code=' + encodeURIComponent(code)).then(function(r){
+    if(r && (r.ok || r.reason === 'not_found')) lookups.set(key, r);
+    return r;
+  }, function(){ return null; }).then(function(r){
+    btn.disabled = false;
+    if(my !== batchSeq) return;
+    showLookup(r);
+  });
+}
+$('searchBtn').addEventListener('click', doSearch);
 $('batchCode').addEventListener('input', updateBatchLookup);
-$('checkOnline').addEventListener('click', function(){
-  var c = $('batchCode').value.trim();
-  if(c && navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(c).then(function(){ toast('Batch code copied. Paste it on the checker.'); }, function(){});
-  }
-});
+$('batchCode').addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); doSearch(); } });
 
 /* add screen */
 function currentExpiryKey(){
@@ -1020,7 +1022,7 @@ $('againBtn').addEventListener('click', function(){
   checkBarcode();
   $('qty').focus();
 });
-$('clearBtn').addEventListener('click', function(){ hideAgain(); selectedBrand = ''; resetAdd(); renderChips(); $('batchBox').open = false; });
+$('clearBtn').addEventListener('click', function(){ hideAgain(); resetBrand(); resetAdd(); $('batchBox').open = false; });
 
 
 /* live barcode scanner */
@@ -1428,7 +1430,7 @@ function showView(name){
   window.scrollTo(0, 0);
   var h = '#' + currentView;
   if(location.hash !== h){ try{ location.hash = currentView; }catch(e){} }
-  if(list) renderList(); else { renderChips(); updateBatchLookup(); }
+  if(list) renderList();
 }
 $('tabAdd').addEventListener('click', function(){ showView('add'); });
 $('tabList').addEventListener('click', function(){ showView('list'); });
@@ -1446,17 +1448,11 @@ function scheduleRender(){
     renderTotals();
     if(currentView === 'list') renderList();
     if(currentView === 'add' && $('barcode').value) checkBarcode();
-    if(currentView === 'add'){ renderChips(); updateBatchLookup(); }
     if(editId && !items.get(editId)){ closeSheet(); }
   });
 }
 function startSync(){
   var slow = setTimeout(function(){ setSync('slow', 'Still connecting…'); }, 10000);
-  db.collection('brands').onSnapshot(function(snap){
-    brands.clear();
-    snap.docs.forEach(function(d){ var v = d.data() || {}; if(v.name) brands.set(d.id, { key: d.id, name: String(v.name) }); });
-    scheduleRender();
-  }, function(){});
   db.collection('batches').onSnapshot(function(snap){
     batches.clear();
     snap.docs.forEach(function(d){ var v = d.data() || {}; batches.set(d.id, { brand: v.brand || '', code: v.code || '', expiry: v.expiry || '' }); });
