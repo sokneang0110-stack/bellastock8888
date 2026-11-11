@@ -895,7 +895,7 @@ function showDrop(){
   if(!found.length){
     frag.appendChild(el('div', 'note', brandList.length ? 'No brand found. Check the spelling.' : (sheetUrl ? 'Loading the brand list…' : 'The brand list is not available here.')));
   } else {
-    found.slice(0, 80).forEach(function(n){
+    found.slice(0, 300).forEach(function(n){
       var o = el('button', 'opt', n); o.type = 'button'; o.dataset.name = n; o.setAttribute('role', 'option'); frag.appendChild(o);
     });
   }
