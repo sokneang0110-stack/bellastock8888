@@ -520,6 +520,13 @@ var assets = {
     var url = URL.createObjectURL(blob); urls.set(id, url);
     return { id: id, url: url, sizeBytes: blob.size, contentType: blob.type };
   },
+  getBlob: async function(id){ return await wrap(store('assets', 'readonly').get(id)); },
+  putAs: async function(id, blob){
+    var tx = idb.transaction('assets', 'readwrite'); tx.objectStore('assets').put(blob, id);
+    await done(tx);
+    var old = urls.get(id); if(old){ try{ URL.revokeObjectURL(old); }catch(e){} }
+    urls.set(id, URL.createObjectURL(blob));
+  },
   delete: async function(id){
     var tx = idb.transaction('assets', 'readwrite'); tx.objectStore('assets').delete(id);
     await done(tx);
@@ -1438,7 +1445,7 @@ var DEFAULT_URL = 'https://script.google.com/macros/s/AKfycbyh3kOsTohPHk8TxbS8Lr
 function get(k){
   var v = null;
   try{ v = localStorage.getItem(k); }catch(e){}
-  if(k === K_URL){ if(v === 'off') return null; return v || DEFAULT_URL; }
+  if(k === K_URL) return DEFAULT_URL;
   return v;
 }
 function put(k, v){ try{ if(v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); }catch(e){} }
@@ -1447,12 +1454,13 @@ function $(id){ return document.getElementById(id); }
 function queue(){ try{ return JSON.parse(get(K_Q) || '[]'); }catch(e){ return []; } }
 function setQ(q){ put(K_Q, JSON.stringify(q)); }
 function say(text, kind){ var s = $('syncStatus'); s.textContent = text; s.setAttribute('data-kind', kind || ''); }
-var sheetOk = false;
+var sheetOk = false, sheetErr = false;
 function topLabel(){
   var u = get(K_URL), n = queue().length, el = $('sync');
   if(!el || el.dataset.state === 'error' || el.dataset.state === 'off' || el.dataset.state === 'loading') return;
   if(!u){ el.dataset.state = 'slow'; $('syncText').textContent = 'Saved on this phone only. Not backed up'; }
   else if(n){ el.dataset.state = 'slow'; $('syncText').textContent = 'Saved here. ' + n + ' waiting to reach the sheet'; }
+  else if(sheetErr){ el.dataset.state = 'slow'; $('syncText').textContent = 'Saved here. Cannot reach the sheet yet, will retry'; }
   else if(sheetOk){ el.dataset.state = 'ok'; $('syncText').textContent = 'Synced with Google Sheet'; }
   else { el.dataset.state = 'slow'; $('syncText').textContent = 'Saved here. Checking the sheet…'; }
 }
@@ -1461,7 +1469,7 @@ var _setSync = window.setSync;
 window.setSync = function(state, text){ _setSync(state, text); if(state === 'ok') topLabel(); };
 function tag(){ var u = get(K_URL), n = queue().length; $('syncTag').textContent = !u ? 'Not set up' : (n ? n + ' waiting to send' : 'On'); topLabel(); }
 function rowOf(id, v){
-  return { id: id, barcode: v.barcode || '', name: v.name || '', qty: v.qty, expiry: v.expiry || '', noExpiry: !!v.noExpiry, brand: v.brand || '', batchCode: v.batchCode || '', expirySource: v.expirySource || '', updatedAt: v.updatedAt || '' };
+  return { id: id, barcode: v.barcode || '', name: v.name || '', qty: v.qty, expiry: v.expiry || '', noExpiry: !!v.noExpiry, brand: v.brand || '', batchCode: v.batchCode || '', expirySource: v.expirySource || '', updatedAt: v.updatedAt || '', photoId: v.photoId || '' };
 }
 var busy = false;
 async function flush(){
@@ -1503,6 +1511,43 @@ async function sendAll(){
   say('Sending ' + all.length + ' items…', ''); await flush();
 }
 var pulling = false;
+function shrink(blob){
+  return new Promise(function(res, rej){
+    var img = new Image(), u = URL.createObjectURL(blob);
+    img.onload = function(){
+      var max = 560, w = img.naturalWidth, h = img.naturalHeight, k = Math.min(1, max / Math.max(w, h));
+      var c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k));
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(u);
+      c.toBlob(function(b){
+        if(!b) return rej(new Error('shrink'));
+        var fr = new FileReader(); fr.onload = function(){ res(fr.result); }; fr.onerror = function(){ rej(new Error('read')); }; fr.readAsDataURL(b);
+      }, 'image/jpeg', 0.6);
+    };
+    img.onerror = function(){ URL.revokeObjectURL(u); rej(new Error('image')); };
+    img.src = u;
+  });
+}
+async function uploadPhoto(url, id){
+  var assets = await window.claude.use('assets');
+  var blob = assets && await assets.getBlob(id);
+  if(!blob) return false;
+  var data = await shrink(blob);
+  await fetch(url, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ phone: dev, ops: [{ op: 'photo', id: id, data: data }] }) });
+  return true;
+}
+async function fetchPhoto(url, id){
+  if(window.__photoUrl(id)) return true;
+  try{
+    var res = await fetch(url + '?action=photo&id=' + encodeURIComponent(id), { cache: 'no-store' });
+    var j = await res.json();
+    if(!j || !j.ok || !j.data) return false;
+    var blob = await (await fetch(j.data)).blob();
+    var assets = await window.claude.use('assets');
+    await assets.putAs(id, blob);
+    return true;
+  }catch(e){ return false; }
+}
 async function readItems(db){
   return await new Promise(function(res){
     var un = null, got = false;
@@ -1521,6 +1566,8 @@ async function pull(){
     var db = await window.claude.use('db');
     if(!db) throw new Error('nodb');
     var local = await readItems(db), col = db.collection('items'), added = 0, removed = 0;
+    var photoSet = {}; (data.photoIds || []).forEach(function(x){ photoSet[x] = true; });
+    var shown = {}; Object.keys(local).forEach(function(k){ var pid = local[k].photoId; if(pid && window.__photoUrl(pid)) shown[pid] = true; });
     window.__syncMute = true;
     for(var i = 0; i < data.rows.length; i++){
       var r = data.rows[i], l = local[r.id], ru = String(r.updatedAt || '');
@@ -1528,26 +1575,40 @@ async function pull(){
         if(l && ru >= String(l.updatedAt || '')){ await col.doc(r.id).delete(); removed++; }
         continue;
       }
-      if(l && String(l.updatedAt || '') >= ru) continue;
+      var want = (r.photoId && photoSet[r.photoId]) ? r.photoId : '';
+      if(want && !(await fetchPhoto(url, want))) want = '';
+      if(l && String(l.updatedAt || '') >= ru){
+        if(want && l.photoId !== want && (!l.photoId && String(l.updatedAt || '') === ru)){
+          await col.doc(r.id).set(Object.assign({}, l, { photoId: want })); added++;
+        }else if(want && l.photoId === want && !shown[want]){
+          await col.doc(r.id).set(Object.assign({}, l)); added++;
+        }
+        continue;
+      }
       await col.doc(r.id).set({
         name: r.name || '', barcode: r.barcode || '', qty: Number(r.qty) || 0, expiry: r.expiry || '', noExpiry: !!r.noExpiry,
         brand: r.brand || '', batchCode: r.batchCode || '', expirySource: r.expirySource || '',
-        updatedAt: ru || new Date().toISOString(), createdAt: (l && l.createdAt) || ru || new Date().toISOString(), photoId: (l && l.photoId) || null
+        updatedAt: ru || new Date().toISOString(), createdAt: (l && l.createdAt) || ru || new Date().toISOString(), photoId: want || (l && l.photoId) || null
       });
       added++;
     }
     window.__syncMute = false;
     var remote = {}; data.rows.forEach(function(r){ remote[r.id] = r; });
     var q = queue(), pushed = 0;
+    var toUpload = [], seen = {};
     Object.keys(local).forEach(function(id){
-      var l = local[id], rr = remote[id];
-      if(!rr || String(l.updatedAt || '') > String(rr.updatedAt || '')){ q.push({ op: 'upsert', row: rowOf(id, l) }); pushed++; }
+      var l = local[id], rr = remote[id], lu = String(l.updatedAt || '');
+      if(l.photoId && !photoSet[l.photoId] && !seen[l.photoId]){ seen[l.photoId] = true; toUpload.push(l.photoId); }
+      var same = rr && lu === String(rr.updatedAt || '');
+      if(!rr || lu > String(rr.updatedAt || '') || (same && l.photoId && l.photoId !== (rr.photoId || ''))){ q.push({ op: 'upsert', row: rowOf(id, l) }); pushed++; }
     });
+    var photosSent = 0;
+    for(var k = 0; k < toUpload.length && k < 4; k++){ try{ if(await uploadPhoto(url, toUpload[k])) photosSent++; }catch(e){} }
     if(pushed){ setQ(q); tag(); await flush(); }
-    sheetOk = true;
-    say('Synced at ' + new Date().toLocaleTimeString() + (added || removed || pushed ? '. ' + added + ' updated and ' + removed + ' removed on this phone, ' + pushed + ' sent to the sheet.' : '. Everything matches your sheet.'), 'good');
+    sheetOk = true; sheetErr = false;
+    say('Synced at ' + new Date().toLocaleTimeString() + (added || removed || pushed || photosSent ? '. ' + added + ' updated and ' + removed + ' removed on this phone, ' + pushed + ' sent to the sheet' + (photosSent ? ', ' + photosSent + ' photo(s) uploaded' : '') + '.' : '. Everything matches your sheet.'), 'good');
   }catch(e){
-    sheetOk = false;
+    sheetOk = false; sheetErr = true;
     say('Could not read the sheet. Check the address and your internet.', 'bad');
   }finally{
     window.__syncMute = false; pulling = false; tag();
@@ -1561,6 +1622,8 @@ $('syncSave').addEventListener('click', function(){
   put(K_URL, u); say('Saved. Syncing your items…', ''); tag(); syncNow();
 });
 $('syncAll').addEventListener('click', syncNow);
+$('sync').style.cursor = 'pointer'; $('sync').addEventListener('click', syncNow);
+$('syncBox').hidden = true; $('syncBox').style.display = 'none';
 document.addEventListener('visibilitychange', function(){ if(!document.hidden) pull(); });
 setInterval(function(){ if(!document.hidden) pull(); }, 30000);
 window.addEventListener('online', flush);
