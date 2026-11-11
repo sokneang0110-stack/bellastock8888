@@ -1354,7 +1354,7 @@ function showView(name){
 $('tabAdd').addEventListener('click', function(){ showView('add'); });
 $('tabList').addEventListener('click', function(){ showView('list'); });
 window.addEventListener('hashchange', function(){
-  var want = location.hash === '#list' ? 'list' : 'add';
+  var want = location.hash === '#add' ? 'add' : 'list';
   if(want !== currentView) showView(want);
 });
 
@@ -1431,7 +1431,7 @@ async function init(){
 
 setupDate('expiry', 'expiryCal', 'expiryHint');
 setupDate('eExpiry', 'eExpiryCal', 'eExpiryHint');
-showView(location.hash === '#list' ? 'list' : 'add');
+showView(location.hash === '#add' ? 'add' : 'list');
 renderTotals();
 init();
 })();
