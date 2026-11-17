@@ -620,7 +620,7 @@ var pendingCode = '';
 var toastTimer = 0;
 var renderQueued = false;
 var currentView = 'add';
-var NATIVE_FORMATS = ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf','qr_code'];
+var NATIVE_FORMATS = ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf'];
 
 function fmt(n){ return Number(n || 0).toLocaleString(); }
 function el(tag, cls, text){ var n = document.createElement(tag); if(cls) n.className = cls; if(text != null) n.textContent = text; return n; }
@@ -769,6 +769,7 @@ async function compressPhoto(file){
     c.toBlob(function(b){ b ? res(b) : rej(new Error('blob')); }, 'image/jpeg', 0.72);
   });
 }
+function isLink(t){ return /^[a-z][a-z0-9+.-]*:\/\/|^www\./i.test(String(t).trim()); }
 async function decodeBarcode(file){
   var img = await loadImage(file);
   var plans = [[1600, false], [1000, false], [1600, true], [2400, false]];
@@ -777,14 +778,14 @@ async function decodeBarcode(file){
       var det = new window.BarcodeDetector({ formats: NATIVE_FORMATS });
       for(var i = 0; i < 3; i++){
         var found = await det.detect(toCanvas(img, plans[i][0], plans[i][1]));
-        if(found.length && found[0].rawValue) return found[0].rawValue;
+        if(found.length && found[0].rawValue && !isLink(found[0].rawValue)) return found[0].rawValue;
       }
     }catch(e){}
   }
   var Z = window.ZXing;
   if(!Z) throw new Error('nodecoder');
   var hints = new Map();
-  hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.UPC_A, Z.BarcodeFormat.UPC_E, Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.CODE_39, Z.BarcodeFormat.ITF, Z.BarcodeFormat.QR_CODE]);
+  hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.UPC_A, Z.BarcodeFormat.UPC_E, Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.CODE_39, Z.BarcodeFormat.ITF]);
   hints.set(Z.DecodeHintType.TRY_HARDER, true);
   for(var j = 0; j < plans.length; j++){
     try{
@@ -793,7 +794,7 @@ async function decodeBarcode(file){
       reader.setHints(hints);
       var bmp = new Z.BinaryBitmap(new Z.HybridBinarizer(new Z.HTMLCanvasElementLuminanceSource(c)));
       var text = reader.decode(bmp).getText();
-      if(text) return text;
+      if(text && !isLink(text)) return text;
     }catch(e){}
   }
   return null;
@@ -1091,6 +1092,7 @@ function gotCode(code){
   if(cb) cb(code);
 }
 function acceptable(code){
+  if(isLink(code)) return false;
   if(/^\d{8}$|^\d{12,14}$/.test(code)) return true;
   if(code === lastRead) sameCount++; else { lastRead = code; sameCount = 1; }
   return sameCount >= 2;
@@ -1104,7 +1106,7 @@ function zxingFrame(v){
   zcanvas.getContext('2d', { willReadFrequently: true }).drawImage(v, 0, 0, zcanvas.width, zcanvas.height);
   if(!zx){
     var hints = new Map();
-    hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.UPC_A, Z.BarcodeFormat.UPC_E, Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.CODE_39, Z.BarcodeFormat.ITF, Z.BarcodeFormat.QR_CODE]);
+    hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.UPC_A, Z.BarcodeFormat.UPC_E, Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.CODE_39, Z.BarcodeFormat.ITF]);
     hints.set(Z.DecodeHintType.TRY_HARDER, true);
     zx = new Z.MultiFormatReader(); zx.setHints(hints);
   }
