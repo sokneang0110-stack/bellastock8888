@@ -430,6 +430,10 @@ input:disabled:not(.cal){opacity:.5}
     <div id="acctSignedIn" hidden>
       <div class="acct-who"><b id="acctEmail"></b><span class="tiny" id="acctLevel"></span></div>
       <button type="button" class="btn btn-quiet btn-small" id="acctOut">Sign out</button>
+      <div id="acctRenew" hidden>
+        <p class="tiny">Your sign in ended. Tap the Google button to sign in again.</p>
+        <div id="gBtn2"></div>
+      </div>
       <div id="acctPrice" hidden>
         <div class="acct-sec">Today's rate</div>
         <div class="rate-row">
@@ -2204,11 +2208,11 @@ async function ensureGsi(){
   window.google.accounts.id.initialize({ client_id: CID, callback: onCredential, auto_select: true, cancel_on_tap_outside: true });
   gsiReady = true; return true;
 }
-async function showButton(){
-  $('gBtn').textContent = '';
+async function showButton(id){
+  var box = $(id || 'gBtn'); box.textContent = '';
   if(!(await ensureGsi())) return;
   $('gNote').textContent = '';
-  window.google.accounts.id.renderButton($('gBtn'), { theme: 'outline', size: 'large', text: 'signin_with', shape: 'pill', width: 260 });
+  window.google.accounts.id.renderButton(box, { theme: 'outline', size: 'large', text: 'signin_with', shape: 'pill', width: 260 });
 }
 function render(){
   var inn = !!acc;
@@ -2217,8 +2221,10 @@ function render(){
     $('acctEmail').textContent = acc.email; $('acctLevel').textContent = LONG[acc.level] || '';
     $('acctAdmin').hidden = !acc.isMain;
     $('acctPrice').hidden = acc.level !== 'owner'; paintRate();
-    if(!tokenOk()){ msg('Your sign in ended. Sign in again to change people.', ''); }
-  } else { $('acctPrice').hidden = true; showButton(); }
+    var need = !tokenOk();
+    $('acctRenew').hidden = !need;
+    if(need){ $('gBtn').textContent = ''; showButton('gBtn2'); } else { $('gBtn2').textContent = ''; }
+  } else { $('acctPrice').hidden = true; $('acctRenew').hidden = true; $('gBtn2').textContent = ''; showButton(); }
 }
 function peopleList(j){
   var ul = $('pplList'); ul.textContent = '';
