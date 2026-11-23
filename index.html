@@ -153,6 +153,7 @@ button,input{font:inherit;color:inherit}
 .code{font-family:var(--font-mono);font-size:13px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .code.none{font-family:var(--font-body);font-style:italic}
 .exp{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.price{font-size:13px;font-weight:700;color:var(--good);font-variant-numeric:tabular-nums}
 .exp.expired{color:var(--danger);font-weight:600}
 .exp.soon{color:var(--warn);font-weight:600}
 a.btn{text-decoration:none}
@@ -241,6 +242,10 @@ input:disabled:not(.cal){opacity:.5}
 .acct-add{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .acct-add input{flex:1 1 200px;min-width:0}
 .acct-def{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.pbox{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.pbox .inline input{flex:1;min-width:0}
+.rate-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.rate-row input{width:7.5em;min-height:40px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);padding:0 10px;font:inherit}
 .acct-msg{margin-top:10px;font-size:14px}
 .acct-msg[data-kind="bad"]{color:var(--danger)}
 #gBtn{min-height:44px;display:flex;justify-content:flex-start}
@@ -422,6 +427,16 @@ input:disabled:not(.cal){opacity:.5}
     <div id="acctSignedIn" hidden>
       <div class="acct-who"><b id="acctEmail"></b><span class="tiny" id="acctLevel"></span></div>
       <button type="button" class="btn btn-quiet btn-small" id="acctOut">Sign out</button>
+      <div id="acctPrice" hidden>
+        <div class="acct-sec">Today's rate</div>
+        <div class="rate-row">
+          <span>1 USD =</span>
+          <input id="rateIn" type="text" inputmode="numeric" autocomplete="off" placeholder="4100" aria-label="Riel for 1 US dollar">
+          <span>riel</span>
+          <button type="button" class="btn btn-small" id="rateSave">Save rate</button>
+        </div>
+        <p class="tiny" id="rateInfo"></p>
+      </div>
       <div id="acctAdmin" hidden>
         <div class="acct-sec">People</div>
         <ul class="ppl" id="pplList"></ul>
@@ -497,6 +512,18 @@ input:disabled:not(.cal){opacity:.5}
       <div class="field">
         <span class="label">Barcode</span>
         <p class="mono" id="eBarcode"></p>
+      </div>
+      <div class="field" id="pricePanel" hidden>
+        <label for="pSell">Sell price (USD)</label>
+        <div class="pbox">
+          <div class="inline">
+            <input id="pSell" type="text" inputmode="decimal" autocomplete="off" placeholder="For example 5.50" aria-label="Sell price in US dollars">
+            <button type="button" class="btn btn-small" id="pSave">Save price</button>
+          </div>
+          <span class="tiny" id="pRiel"></span>
+          <button type="button" class="btn btn-quiet btn-small" id="pFam" hidden>Use this price for the whole family</button>
+          <span class="tiny" id="pMsg" role="status"></span>
+        </div>
       </div>
       <div class="field">
         <label for="eQty">Quantity</label>
@@ -1474,6 +1501,7 @@ function rowEl(it){
   var info = el('div', 'info');
   info.appendChild(el('span', 'name', it.name || 'Untitled'));
   info.appendChild(el('span', 'code' + (it.barcode ? '' : ' none'), it.barcode || 'No barcode'));
+  var pl = window.__priceLabel ? window.__priceLabel(it) : ''; if(pl) info.appendChild(el('span', 'price', pl));
   if(!it.expiry && it.noExpiry){ info.appendChild(el('span', 'exp', 'No expiration date')); }
   if(it.expiry){
     var st = expiryState(it.expiry);
@@ -1501,6 +1529,7 @@ function autoRowEl(g){
   var info = el('div', 'info');
   info.appendChild(el('span', 'name', lines[0].name || 'Untitled'));
   info.appendChild(el('span', 'code', lines[0].barcode));
+  var pl = window.__priceLabel ? window.__priceLabel(lines[0]) : ''; if(pl) info.appendChild(el('span', 'price', pl));
   var st = first ? expiryState(first) : '';
   info.appendChild(el('span', 'exp' + (st ? ' ' + st : ''), lines.length + ' expiry dates' + (st === 'expired' ? ' · one expired' : (st === 'soon' ? ' · one soon' : ''))));
   var q = el('div', 'qty');
@@ -1586,6 +1615,8 @@ function famEl(g, force){
   li.appendChild(ul);
   return li;
 }
+window.__allItems = function(){ return Array.from(items.values()); };
+window.__rerender = function(){ renderList(); };
 function renderList(){
   var ul = $('rows'), msg = $('listMsg'), more = $('moreBtn');
   var q = $('search').value.trim().toLowerCase();
@@ -1696,11 +1727,13 @@ function openSheet(id){
   $('confirmDel').hidden = true; $('delBtn').hidden = false;
   $('sheetError').textContent = '';
   paintSheetPreview();
+  if(window.__onEdit) window.__onEdit(it);
   $('sheet').hidden = false;
   document.body.style.overflow = 'hidden';
 }
 function closeSheet(){
   $('sheet').hidden = true; editId = null;
+  if(window.__onEditClose) window.__onEditClose();
   setPhotoState(sheetPhoto, null);
   document.body.style.overflow = '';
 }
@@ -2119,9 +2152,13 @@ function save(){ try{ if(acc) localStorage.setItem(K_ACC, JSON.stringify(acc)); 
 function msg(t, kind){ var m = $('acctMsg'); m.textContent = t || ''; m.setAttribute('data-kind', kind || ''); }
 function expOf(t){ try{ var p = JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); return p.exp * 1000; }catch(e){ return 0; } }
 function tokenOk(){ return !!token && (token.indexOf('FAKE~') === 0 || expOf(token) - 60000 > Date.now()); }
+function paintChip(){
+  var b = $('acctBtn'); if(!b) return;
+  b.textContent = acc ? (tokenOk() ? (LABEL[acc.level] || 'Signed in') : 'Sign in again') : 'Sign in';
+}
 function chip(){
   var b = $('acctBtn'); if(!b) return;
-  b.textContent = acc ? (LABEL[acc.level] || 'Signed in') : 'Sign in';
+  paintChip();
   b.setAttribute('data-level', acc ? acc.level : '');
   b.title = acc ? acc.email : 'Owner sign in';
   window.__access = acc ? { email: acc.email, level: acc.level, isMain: !!acc.isMain } : { email: '', level: 'default', isMain: false };
@@ -2152,6 +2189,7 @@ async function onCredential(r){
     acc = { email: j.email, level: j.level, isMain: !!j.isMain }; save(); chip();
     msg('');
     render(); if(acc.isMain) loadPeople();
+    loadPrices();
   }catch(e){ msg('Cannot reach the server. Check the internet and try again.', 'bad'); }
 }
 async function ensureGsi(){
@@ -2173,8 +2211,9 @@ function render(){
   if(inn){
     $('acctEmail').textContent = acc.email; $('acctLevel').textContent = LONG[acc.level] || '';
     $('acctAdmin').hidden = !acc.isMain;
+    $('acctPrice').hidden = acc.level !== 'owner'; paintRate();
     if(!tokenOk()){ msg('Your sign in ended. Sign in again to change people.', ''); }
-  } else showButton();
+  } else { $('acctPrice').hidden = true; showButton(); }
 }
 function peopleList(j){
   var ul = $('pplList'); ul.textContent = '';
@@ -2206,6 +2245,7 @@ function open_(){
   $('acct').hidden = false; document.body.style.overflow = 'hidden'; msg('');
   render();
   if(acc && acc.isMain && tokenOk()) loadPeople();
+  if(acc && tokenOk() && !PR.loaded) loadPrices();
 }
 function close_(){ $('acct').hidden = true; document.body.style.overflow = ''; }
 $('acctBtn').addEventListener('click', open_);
@@ -2213,7 +2253,7 @@ $('acctClose').addEventListener('click', close_);
 $('acct').addEventListener('click', function(e){ if(e.target === $('acct')) close_(); });
 document.addEventListener('keydown', function(e){ if(e.key === 'Escape' && !$('acct').hidden) close_(); });
 $('acctOut').addEventListener('click', function(){
-  token = ''; acc = null; save(); chip();
+  token = ''; acc = null; save(); chip(); clearPrices();
   try{ if(window.google && window.google.accounts) window.google.accounts.id.disableAutoSelect(); }catch(e){}
   msg(''); render();
 });
@@ -2223,6 +2263,115 @@ $('pplAdd').addEventListener('click', function(){
   run('setPerson', { email: em, level: $('pplLevel').value }).then(function(){ $('pplEmail').value = ''; });
 });
 $('defLevel').addEventListener('change', function(){ run('setDefault', { level: $('defLevel').value }); });
+
+/* ---------- prices (owner only; kept in the script's private storage, not in the sheet) ---------- */
+var PR = { loaded: false, sell: {}, rate: 0, rateAt: '' }, curItem = null, famSure = '';
+function keyOf(it){ return it.barcode || it.id; }
+function money(n){ return '$' + (Math.round(n * 100) / 100).toFixed(2); }
+function rielOf(usd, rate){ return Math.round(Math.round(usd * 100) * rate / 10000) * 100; }
+function riels(n){ return n.toLocaleString('en-US') + '៛'; }
+function priceText(usd){ return money(usd) + (PR.rate ? ' · ' + riels(rielOf(usd, PR.rate)) : ''); }
+window.__priceLabel = function(it){
+  if(!PR.loaded) return '';
+  var v = PR.sell[keyOf(it)];
+  return (v === undefined || v === null) ? '' : priceText(v);
+};
+function repaint(){ try{ if(window.__rerender) window.__rerender(); }catch(e){} }
+function clearPrices(){ PR = { loaded: false, sell: {}, rate: 0, rateAt: '' }; hidePanel(); repaint(); }
+async function loadPrices(){
+  if(!acc || acc.level !== 'owner' || !tokenOk()) return;
+  try{
+    var j = await call('prices');
+    if(!j.ok || !j.canSee) return;
+    PR = { loaded: true, sell: j.sell || {}, rate: Number(j.rate) || 0, rateAt: j.rateAt || '' };
+    paintRate(); repaint();
+    if(curItem) showPanel(curItem);
+  }catch(e){ /* offline: prices stay hidden until the next try */ }
+}
+function paintRate(){
+  if($('acctPrice').hidden) return;
+  if(document.activeElement !== $('rateIn')) $('rateIn').value = PR.rate ? String(PR.rate) : '';
+  var d = PR.rateAt ? new Date(PR.rateAt) : null;
+  $('rateInfo').textContent = PR.rate
+    ? 'It stays the same until you change it.' + (d && !isNaN(d) ? ' Last changed ' + d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + '.' : '')
+    : 'Type today’s rate to see prices in riel.';
+}
+function parseUsd(t){
+  t = String(t || '').trim().replace(/^\$/, '').replace(',', '.');
+  if(t === '') return { clear: true };
+  if(!/^\d{1,6}(\.\d{1,2})?$/.test(t)) return null;
+  var n = Number(t); return n > 100000 ? null : { v: n };
+}
+function pmsg(t, bad){ var m = $('pMsg'); m.textContent = t || ''; m.style.color = bad ? 'var(--danger)' : ''; }
+function famMembers(it){
+  var f = (it.family || '').trim().toLowerCase(), seen = {}, keys = [];
+  if(!f) return keys;
+  (window.__allItems ? window.__allItems() : []).forEach(function(x){
+    if((x.family || '').trim().toLowerCase() === f){ var k = keyOf(x); if(!seen[k]){ seen[k] = 1; keys.push(k); } }
+  });
+  return keys;
+}
+function riel(){
+  var p = parseUsd($('pSell').value), r = $('pRiel');
+  if(!p || p.clear){ r.textContent = PR.rate ? '' : 'Set today’s rate in Account to see riel.'; return; }
+  r.textContent = PR.rate ? '= ' + riels(rielOf(p.v, PR.rate)) + ' (rate ' + PR.rate + ')' : 'Set today’s rate in Account to see riel.';
+}
+function showPanel(it){
+  var on = !!acc && acc.level === 'owner' && PR.loaded;
+  $('pricePanel').hidden = !on;
+  if(!on) return;
+  var v = PR.sell[keyOf(it)];
+  $('pSell').value = (v === undefined || v === null) ? '' : String(v);
+  famSure = ''; pmsg(''); riel();
+  var n = famMembers(it).length;
+  $('pFam').hidden = !(it.family && n > 1);
+  $('pFam').textContent = 'Use this price for the whole family (' + n + ' items)';
+}
+function hidePanel(){ $('pricePanel').hidden = true; curItem = null; }
+window.__onEdit = function(it){ curItem = it; showPanel(it); };
+window.__onEditClose = function(){ curItem = null; $('pricePanel').hidden = true; };
+$('pSell').addEventListener('input', function(){ famSure = ''; pmsg(''); riel(); });
+var PREASON = { signin: 'Your sign in ended. Tap Sign in at the top.', not_allowed: 'Only owners can change prices.', bad_price: 'That price does not look right.', bad_key: 'This item cannot have a price.' };
+async function sendSell(cmd, extra, okText){
+  if(!tokenOk()){ pmsg('Your sign in ended. Tap Sign in at the top, then try again.', true); return; }
+  pmsg('Saving…');
+  try{
+    var j = await call(cmd, extra);
+    if(!j.ok){ pmsg(PREASON[j.reason] || 'Something went wrong.', true); return; }
+    Object.keys(j.changed || {}).forEach(function(k){ if(j.changed[k] === null) delete PR.sell[k]; else PR.sell[k] = j.changed[k]; });
+    pmsg(okText); riel(); repaint();
+  }catch(e){ pmsg('Cannot reach the server. Nothing was changed.', true); }
+}
+$('pSave').addEventListener('click', function(){
+  if(!curItem) return;
+  var p = parseUsd($('pSell').value);
+  if(!p){ pmsg('Type the price like 5.50', true); return; }
+  sendSell('setSell', { key: keyOf(curItem), sell: p.clear ? null : p.v }, p.clear ? 'Price removed.' : 'Price saved.');
+});
+$('pFam').addEventListener('click', function(){
+  if(!curItem) return;
+  var p = parseUsd($('pSell').value);
+  if(!p || p.clear){ pmsg('Type the price first, like 5.50', true); return; }
+  var keys = famMembers(curItem);
+  if(famSure !== String(p.v)){ famSure = String(p.v); pmsg('Tap again to set ' + money(p.v) + ' for all ' + keys.length + ' items in this family.'); return; }
+  famSure = '';
+  sendSell('setSellMany', { keys: keys, sell: p.v }, 'Price saved for ' + keys.length + ' items.');
+});
+$('rateSave').addEventListener('click', async function(){
+  var t = $('rateIn').value.replace(/[,\s]/g, '');
+  if(!/^\d{3,6}$/.test(t) || Number(t) < 100 || Number(t) > 100000){ msg('Type the rate as a whole number, like 4100.', 'bad'); return; }
+  if(!tokenOk()){ msg('Your sign in ended. Sign in again.', 'bad'); return; }
+  msg('Saving…');
+  try{
+    var j = await call('setRate', { rate: Number(t) });
+    if(!j.ok){ msg(j.reason === 'bad_rate' ? 'That rate does not look right.' : (REASON[j.reason] || 'Something went wrong.'), 'bad'); return; }
+    PR.rate = Number(j.rate); PR.rateAt = j.rateAt || ''; paintRate(); repaint(); msg('Rate saved.');
+  }catch(e){ msg('Cannot reach the server. Nothing was changed.', 'bad'); }
+});
+setInterval(function(){
+  paintChip();
+  if(acc && !tokenOk() && gsiReady){ try{ window.google.accounts.id.prompt(); }catch(e){} }
+}, 20000);
 chip();
 // A returning owner is signed in again quietly, when Google allows it.
 if(acc){ ensureGsi().then(function(ok){ if(ok) try{ window.google.accounts.id.prompt(); }catch(e){} }); }
