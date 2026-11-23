@@ -190,6 +190,15 @@ input:disabled:not(.cal){opacity:.5}
 .shades{list-style:none;margin:6px 0 2px 14px;padding:0 0 0 10px;border-left:2px solid var(--line);display:flex;flex-direction:column;gap:6px}
 .shades[hidden]{display:none}
 .shade-h{font-size:12px;font-weight:600;color:var(--muted);padding:6px 4px 0}
+.lots-top{display:grid;grid-template-columns:56px minmax(0,1fr);gap:12px;align-items:center;margin-bottom:14px}
+.lots-top .name{font-weight:600;font-size:17px;line-height:1.25;overflow-wrap:anywhere}
+.lotrow{display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;min-height:64px;padding:12px 16px;background:var(--surface);border:1px solid var(--line);border-radius:12px;text-align:left;cursor:pointer;color:var(--ink);font:inherit;-webkit-tap-highlight-color:transparent}
+.lotrow:active{background:var(--surface-2)}
+.lotrow .lot-date{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums}
+.lotrow .lot-sub{display:block;font-size:13px;color:var(--muted);margin-top:2px}
+.lotrow .lot-sub.expired{color:var(--danger)}
+.lotrow .lot-sub.soon{color:var(--warn,#b45309)}
+.lotrow .num{font-size:28px}
 .qty{display:flex;flex-direction:column;align-items:flex-end;gap:2px}
 .num{font-family:var(--font-display);font-weight:700;font-size:24px;font-variant-numeric:tabular-nums;line-height:1}
 .pill{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--danger);border:1px solid var(--danger);border-radius:999px;padding:1px 7px}
@@ -382,6 +391,19 @@ input:disabled:not(.cal){opacity:.5}
 </nav>
 
 <!-- EDIT SHEET -->
+<div class="sheet" id="lots" hidden>
+  <div class="panel" role="dialog" aria-modal="true" aria-labelledby="lotsTitle">
+    <div class="panel-head">
+      <h2 class="h2" id="lotsTitle">Expiry dates</h2>
+      <button type="button" class="btn btn-quiet btn-small" id="lotsClose">Close</button>
+    </div>
+    <div class="lots-top">
+      <div id="lotsThumb"></div>
+      <div><div class="name" id="lotsName"></div><div class="tiny" id="lotsSub"></div></div>
+    </div>
+    <ul class="rows" id="lotsRows"></ul>
+  </div>
+</div>
 <div class="sheet" id="sheet" hidden>
   <div class="panel" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
     <div class="panel-head">
@@ -1416,6 +1438,55 @@ function renderTotals(){
   $('totals').textContent = fmt(prods.size) + (prods.size === 1 ? ' item' : ' items') + ' · ' + fmt(units) + (units === 1 ? ' unit' : ' units');
   $('tabCount').textContent = fmt(items.size);
 }
+function autoRowEl(g){
+  var lines = g.lines.slice().sort(lineCmp), units = 0, photo = null, first = '';
+  lines.forEach(function(l){ units += Number(l.qty) || 0; if(!photo && l.photoId) photo = l.photoId; if(l.expiry && (!first || l.expiry < first)) first = l.expiry; });
+  var li = document.createElement('li');
+  var b = el('button', 'row autorow'); b.type = 'button'; b.dataset.auto = lines[0].barcode;
+  var info = el('div', 'info');
+  info.appendChild(el('span', 'name', lines[0].name || 'Untitled'));
+  info.appendChild(el('span', 'code', lines[0].barcode));
+  var st = first ? expiryState(first) : '';
+  info.appendChild(el('span', 'exp' + (st ? ' ' + st : ''), lines.length + ' expiry dates' + (st === 'expired' ? ' · one expired' : (st === 'soon' ? ' · one soon' : ''))));
+  var q = el('div', 'qty');
+  q.appendChild(el('span', 'num', fmt(units)));
+  if(!units) q.appendChild(el('span', 'pill', 'Out'));
+  b.appendChild(thumbEl(photo)); b.appendChild(info); b.appendChild(q);
+  li.appendChild(b);
+  return li;
+}
+function openLots(code){
+  var lines = Array.from(items.values()).filter(function(i){ return i.barcode === code; });
+  if(!lines.length) return;
+  lines.sort(function(a, b){ return (a.expiry || '9999').localeCompare(b.expiry || '9999'); });
+  var units = 0, photo = null;
+  lines.forEach(function(l){ units += Number(l.qty) || 0; if(!photo && l.photoId) photo = l.photoId; });
+  $('lotsName').textContent = lines[0].name || 'Untitled';
+  $('lotsSub').textContent = code + ' · ' + fmt(units) + (units === 1 ? ' unit' : ' units') + ' · ' + lines.length + ' expiry dates';
+  var th = $('lotsThumb'); th.replaceChildren(thumbEl(photo));
+  var frag = document.createDocumentFragment();
+  lines.forEach(function(l){
+    var li = document.createElement('li');
+    var b = el('button', 'lotrow'); b.type = 'button'; b.dataset.id = l.id;
+    var left = el('div');
+    left.appendChild(el('span', 'lot-date', l.expiry ? l.expiry : (l.noExpiry ? 'No expiration date' : 'No date')));
+    var st = l.expiry ? expiryState(l.expiry) : '';
+    var sub = (st === 'expired' ? 'Expired' : (st === 'soon' ? 'Expires soon' : '')) + (l.expirySource === 'batch' ? (st ? ' · ' : '') + 'from batch code' : '');
+    if(sub) left.appendChild(el('span', 'lot-sub' + (st ? ' ' + st : ''), sub));
+    var q = el('div', 'qty'); q.appendChild(el('span', 'num', fmt(l.qty)));
+    if(!l.qty) q.appendChild(el('span', 'pill', 'Out'));
+    b.appendChild(left); b.appendChild(q); li.appendChild(b); frag.appendChild(li);
+  });
+  $('lotsRows').replaceChildren(frag);
+  $('lots').hidden = false; document.body.style.overflow = 'hidden';
+}
+function closeLots(){ $('lots').hidden = true; document.body.style.overflow = ''; }
+$('lotsClose').addEventListener('click', closeLots);
+$('lots').addEventListener('click', function(e){ if(e.target === $('lots')) closeLots(); });
+$('lotsRows').addEventListener('click', function(e){
+  var b = e.target.closest ? e.target.closest('.lotrow') : null;
+  if(b){ closeLots(); openSheet(b.dataset.id); }
+});
 function lineCmp(a, b){ return (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase()) || (a.barcode || '').localeCompare(b.barcode || '') || (a.expiry || '9999').localeCompare(b.expiry || '9999'); }
 function thumbEl(photoId){
   var thumb;
@@ -1495,7 +1566,7 @@ function renderList(){
   var ln = function(n){ return fmt(n) + (n === 1 ? ' line' : ' lines'); };
   $('listCount').textContent = q ? fmt(lineCount) + ' of ' + ln(items.size) : ln(items.size);
   var frag = document.createDocumentFragment();
-  entries.slice(0, shown).forEach(function(e){ frag.appendChild(e.group ? famEl(e.group, !!q) : rowEl(e.item)); });
+  entries.slice(0, shown).forEach(function(e){ frag.appendChild(e.group ? (e.group.auto ? autoRowEl(e.group) : famEl(e.group, !!q)) : rowEl(e.item)); });
   ul.replaceChildren(frag);
   if(!entries.length){
     msg.hidden = false;
@@ -1508,6 +1579,8 @@ function renderList(){
 $('search').addEventListener('input', function(){ shown = 60; renderList(); });
 $('moreBtn').addEventListener('click', function(){ shown += 60; renderList(); });
 $('rows').addEventListener('click', function(e){
+  var au = e.target.closest ? e.target.closest('.autorow') : null;
+  if(au){ openLots(au.dataset.auto); return; }
   var h = e.target.closest ? e.target.closest('.famhead') : null;
   if(h){
     var k = h.dataset.fam, li = h.parentNode, ul2 = li.querySelector('.shades'), now = !openFam.has(k);
@@ -1581,7 +1654,7 @@ $('sheet').addEventListener('click', function(e){ if(e.target === $('sheet')) cl
 document.addEventListener('keydown', function(e){
   if(e.key !== 'Escape') return;
   if(scanOpen){ scanCb = null; closeScanner(); return; }
-  if(!$('viewer').hidden) closeViewer(); else if(!$('sheet').hidden) closeSheet();
+  if(!$('viewer').hidden) closeViewer(); else if(!$('lots').hidden) closeLots(); else if(!$('sheet').hidden) closeSheet();
 });
 ['sCam','sLib'].forEach(function(id){
   $(id).addEventListener('click', function(e){ e.target.value = ''; });
