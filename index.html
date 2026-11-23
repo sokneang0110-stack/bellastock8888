@@ -228,6 +228,22 @@ input:disabled:not(.cal){opacity:.5}
 
 /* toast */
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(78px + env(safe-area-inset-bottom,0px));z-index:50;max-width:calc(100% - 32px);padding:10px 16px;border-radius:10px;background:var(--ink);color:var(--bg);font-size:14px;font-weight:500;text-align:center}
+
+.acct{margin-left:8px;flex:none;min-height:34px;max-width:46vw;padding:4px 12px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:600 13px system-ui,sans-serif;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acct[data-level="owner"]{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.acct-who{display:flex;flex-direction:column;gap:2px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--surface);margin-bottom:12px}
+.acct-who b{overflow-wrap:anywhere}
+.acct-sec{margin:16px 0 8px;font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.ppl{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.ppl li{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.ppl .em{flex:1 1 180px;min-width:0;overflow-wrap:anywhere;font-weight:600}
+.ppl select,.acct-add select,.acct-add input,.acct-def select{min-height:40px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);padding:0 10px;font:inherit}
+.acct-add{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.acct-add input{flex:1 1 200px;min-width:0}
+.acct-def{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.acct-msg{margin-top:10px;font-size:14px}
+.acct-msg[data-kind="bad"]{color:var(--danger)}
+#gBtn{min-height:44px;display:flex;justify-content:flex-start}
 </style>
 
 <header class="top">
@@ -237,6 +253,7 @@ input:disabled:not(.cal){opacity:.5}
       <p class="totals" id="totals">0 items · 0 units</p>
     </div>
     <p class="sync" id="sync" data-state="loading"><span class="dot"></span><span id="syncText">Connecting…</span></p>
+    <button type="button" class="acct" id="acctBtn">Sign in</button>
   </div>
 </header>
 
@@ -391,6 +408,44 @@ input:disabled:not(.cal){opacity:.5}
 </nav>
 
 <!-- EDIT SHEET -->
+<div class="sheet" id="acct" hidden>
+  <div class="panel" role="dialog" aria-modal="true" aria-labelledby="acctTitle">
+    <div class="panel-head">
+      <h2 class="h2" id="acctTitle">Account</h2>
+      <button type="button" class="btn btn-quiet btn-small" id="acctClose">Close</button>
+    </div>
+    <div id="acctSignedOut">
+      <p class="tiny">Sign in with Google if you are an owner. Staff do not need to sign in.</p>
+      <div id="gBtn"></div>
+      <p class="tiny" id="gNote"></p>
+    </div>
+    <div id="acctSignedIn" hidden>
+      <div class="acct-who"><b id="acctEmail"></b><span class="tiny" id="acctLevel"></span></div>
+      <button type="button" class="btn btn-quiet btn-small" id="acctOut">Sign out</button>
+      <div id="acctAdmin" hidden>
+        <div class="acct-sec">People</div>
+        <ul class="ppl" id="pplList"></ul>
+        <div class="acct-add">
+          <input id="pplEmail" type="email" inputmode="email" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Google email to add">
+          <select id="pplLevel" aria-label="Level for the new person">
+            <option value="sell">Sell price only</option>
+            <option value="owner">Owner</option>
+            <option value="none">No prices</option>
+          </select>
+          <button type="button" class="btn btn-small" id="pplAdd">Add</button>
+        </div>
+        <div class="acct-sec">Everyone who does not sign in</div>
+        <div class="acct-def">
+          <select id="defLevel" aria-label="Level for people who do not sign in">
+            <option value="sell">Sell price only</option>
+            <option value="none">No prices</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <p class="acct-msg" id="acctMsg" role="status"></p>
+  </div>
+</div>
 <div class="sheet" id="lots" hidden>
   <div class="panel" role="dialog" aria-modal="true" aria-labelledby="lotsTitle">
     <div class="panel-head">
@@ -2047,6 +2102,130 @@ setInterval(function(){ if(!document.hidden) pull(); }, 30000);
 window.addEventListener('online', flush);
 var cur = get(K_URL); if(cur){ $('syncUrl').value = cur; pull(); }
 tag();
+})();
+</script>
+<script>
+(function(){
+'use strict';
+var URL_ = window.__sheetUrl, CID = '411776794955-csbt0acf4s0v6vnuakp20frkn1kai38l.apps.googleusercontent.com';
+var K_ACC = 'stockroom-account';
+var LABEL = { owner: 'Owner', sell: 'Sell price only', none: 'No prices' };
+var LONG = { owner: 'Owner. Sees cost price and sell price.', sell: 'Sees sell price only.', none: 'Sees no prices.' };
+var token = '', acc = null, gsiReady = false, gsiTried = false;
+function $(id){ return document.getElementById(id); }
+function el(tag, cls, text){ var n = document.createElement(tag); if(cls) n.className = cls; if(text != null) n.textContent = text; return n; }
+try{ acc = JSON.parse(localStorage.getItem(K_ACC) || 'null'); }catch(e){ acc = null; }
+function save(){ try{ if(acc) localStorage.setItem(K_ACC, JSON.stringify(acc)); else localStorage.removeItem(K_ACC); }catch(e){} }
+function msg(t, kind){ var m = $('acctMsg'); m.textContent = t || ''; m.setAttribute('data-kind', kind || ''); }
+function expOf(t){ try{ var p = JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); return p.exp * 1000; }catch(e){ return 0; } }
+function tokenOk(){ return !!token && (token.indexOf('FAKE~') === 0 || expOf(token) - 60000 > Date.now()); }
+function chip(){
+  var b = $('acctBtn'); if(!b) return;
+  b.textContent = acc ? (LABEL[acc.level] || 'Signed in') : 'Sign in';
+  b.setAttribute('data-level', acc ? acc.level : '');
+  b.title = acc ? acc.email : 'Owner sign in';
+  window.__access = acc ? { email: acc.email, level: acc.level, isMain: !!acc.isMain } : { email: '', level: 'default', isMain: false };
+  document.dispatchEvent(new CustomEvent('access-change', { detail: window.__access }));
+}
+async function call(cmd, extra){
+  var body = Object.assign({ cmd: cmd, auth: token }, extra || {});
+  var res = await fetch(URL_, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body), redirect: 'follow' });
+  return await res.json();
+}
+function loadGsi(){
+  return new Promise(function(resolve){
+    if(window.google && window.google.accounts && window.google.accounts.id) return resolve(true);
+    var s = document.createElement('script'); s.src = 'https://accounts.google.com/gsi/client'; s.async = true;
+    s.onload = function(){ resolve(!!(window.google && window.google.accounts)); };
+    s.onerror = function(){ resolve(false); };
+    document.head.appendChild(s);
+    setTimeout(function(){ resolve(!!(window.google && window.google.accounts)); }, 8000);
+  });
+}
+async function onCredential(r){
+  token = (r && r.credential) || '';
+  if(!token) return;
+  msg('Checking…');
+  try{
+    var j = await call('whoami');
+    if(!j.ok){ token = ''; acc = null; save(); chip(); msg('Sign in did not work. Try again.', 'bad'); render(); return; }
+    acc = { email: j.email, level: j.level, isMain: !!j.isMain }; save(); chip();
+    msg('');
+    render(); if(acc.isMain) loadPeople();
+  }catch(e){ msg('Cannot reach the server. Check the internet and try again.', 'bad'); }
+}
+async function ensureGsi(){
+  if(gsiReady) return true;
+  var ok = await loadGsi();
+  if(!ok){ $('gNote').textContent = 'Sign in needs the internet. Try again when you are online.'; return false; }
+  window.google.accounts.id.initialize({ client_id: CID, callback: onCredential, auto_select: true, cancel_on_tap_outside: true });
+  gsiReady = true; return true;
+}
+async function showButton(){
+  $('gBtn').textContent = '';
+  if(!(await ensureGsi())) return;
+  $('gNote').textContent = '';
+  window.google.accounts.id.renderButton($('gBtn'), { theme: 'outline', size: 'large', text: 'signin_with', shape: 'pill', width: 260 });
+}
+function render(){
+  var inn = !!acc;
+  $('acctSignedOut').hidden = inn; $('acctSignedIn').hidden = !inn;
+  if(inn){
+    $('acctEmail').textContent = acc.email; $('acctLevel').textContent = LONG[acc.level] || '';
+    $('acctAdmin').hidden = !acc.isMain;
+    if(!tokenOk()){ msg('Your sign in ended. Sign in again to change people.', ''); }
+  } else showButton();
+}
+function peopleList(j){
+  var ul = $('pplList'); ul.textContent = '';
+  var emails = Object.keys(j.people || {}).sort();
+  var me = el('li'); me.appendChild(el('span', 'em', j.email || acc.email)); me.appendChild(el('span', 'tiny', 'Main owner. Always an owner.')); ul.appendChild(me);
+  emails.forEach(function(em){
+    var li = el('li'); li.appendChild(el('span', 'em', em));
+    var sel = el('select'); sel.setAttribute('aria-label', 'Level for ' + em);
+    ['owner', 'sell', 'none'].forEach(function(l){ var o = el('option', null, LABEL[l]); o.value = l; if(j.people[em] === l) o.selected = true; sel.appendChild(o); });
+    sel.addEventListener('change', function(){ run('setPerson', { email: em, level: sel.value }); });
+    var rm = el('button', 'btn btn-quiet btn-small', 'Remove'); rm.type = 'button';
+    rm.addEventListener('click', function(){ if(rm.dataset.sure){ run('removePerson', { email: em }); } else { rm.dataset.sure = '1'; rm.textContent = 'Tap again to remove'; setTimeout(function(){ rm.dataset.sure = ''; rm.textContent = 'Remove'; }, 3500); } });
+    li.appendChild(sel); li.appendChild(rm); ul.appendChild(li);
+  });
+  if(j.defaultLevel) $('defLevel').value = j.defaultLevel;
+}
+var REASON = { signin: 'Your sign in ended. Sign in again.', not_allowed: 'Only the main owner can change people.', bad_email: 'That email does not look right.', bad_level: 'That level is not allowed.', main_locked: 'The main owner cannot be changed.', unknown: 'Something went wrong.' };
+async function run(cmd, extra){
+  if(!tokenOk()){ msg('Your sign in ended. Sign out, then sign in again.', 'bad'); return; }
+  msg('Saving…');
+  try{
+    var j = await call(cmd, extra);
+    if(!j.ok){ msg(REASON[j.reason] || 'Something went wrong.', 'bad'); if(j.reason === 'signin'){ token = ''; } return; }
+    peopleList(j); msg(cmd === 'people' ? '' : 'Saved.');
+  }catch(e){ msg('Cannot reach the server. Nothing was changed.', 'bad'); }
+}
+function loadPeople(){ run('people'); }
+function open_(){
+  $('acct').hidden = false; document.body.style.overflow = 'hidden'; msg('');
+  render();
+  if(acc && acc.isMain && tokenOk()) loadPeople();
+}
+function close_(){ $('acct').hidden = true; document.body.style.overflow = ''; }
+$('acctBtn').addEventListener('click', open_);
+$('acctClose').addEventListener('click', close_);
+$('acct').addEventListener('click', function(e){ if(e.target === $('acct')) close_(); });
+document.addEventListener('keydown', function(e){ if(e.key === 'Escape' && !$('acct').hidden) close_(); });
+$('acctOut').addEventListener('click', function(){
+  token = ''; acc = null; save(); chip();
+  try{ if(window.google && window.google.accounts) window.google.accounts.id.disableAutoSelect(); }catch(e){}
+  msg(''); render();
+});
+$('pplAdd').addEventListener('click', function(){
+  var em = $('pplEmail').value.trim().toLowerCase();
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ msg('That email does not look right.', 'bad'); return; }
+  run('setPerson', { email: em, level: $('pplLevel').value }).then(function(){ $('pplEmail').value = ''; });
+});
+$('defLevel').addEventListener('change', function(){ run('setDefault', { level: $('defLevel').value }); });
+chip();
+// A returning owner is signed in again quietly, when Google allows it.
+if(acc){ ensureGsi().then(function(ok){ if(ok) try{ window.google.accounts.id.prompt(); }catch(e){} }); }
 })();
 </script>
 </html>
