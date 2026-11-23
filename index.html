@@ -518,9 +518,12 @@ input:disabled:not(.cal){opacity:.5}
         <div class="pbox">
           <div class="inline">
             <input id="pSell" type="text" inputmode="decimal" autocomplete="off" placeholder="For example 5.50" aria-label="Sell price in US dollars">
-            <button type="button" class="btn btn-small" id="pSave">Save price</button>
+            <button type="button" class="btn btn-small" id="pSave">Save prices</button>
           </div>
           <span class="tiny" id="pRiel"></span>
+          <label class="tiny" for="pCost">Cost price (USD). Only owners can see this.</label>
+          <input id="pCost" type="text" inputmode="decimal" autocomplete="off" placeholder="For example 3.20" aria-label="Cost price in US dollars">
+          <span class="tiny" id="cRiel"></span>
           <button type="button" class="btn btn-quiet btn-small" id="pFam" hidden>Use this price for the whole family</button>
           <span class="tiny" id="pMsg" role="status"></span>
         </div>
@@ -2265,7 +2268,7 @@ $('pplAdd').addEventListener('click', function(){
 $('defLevel').addEventListener('change', function(){ run('setDefault', { level: $('defLevel').value }); });
 
 /* ---------- prices (owner only; kept in the script's private storage, not in the sheet) ---------- */
-var PR = { loaded: false, sell: {}, rate: 0, rateAt: '' }, curItem = null, famSure = '';
+var PR = { loaded: false, sell: {}, cost: {}, rate: 0, rateAt: '' }, curItem = null, famSure = '';
 function keyOf(it){ return it.barcode || it.id; }
 function money(n){ return '$' + (Math.round(n * 100) / 100).toFixed(2); }
 function rielOf(usd, rate){ return Math.round(Math.round(usd * 100) * rate / 10000) * 100; }
@@ -2277,13 +2280,13 @@ window.__priceLabel = function(it){
   return (v === undefined || v === null) ? '' : priceText(v);
 };
 function repaint(){ try{ if(window.__rerender) window.__rerender(); }catch(e){} }
-function clearPrices(){ PR = { loaded: false, sell: {}, rate: 0, rateAt: '' }; hidePanel(); repaint(); }
+function clearPrices(){ PR = { loaded: false, sell: {}, cost: {}, rate: 0, rateAt: '' }; $('pCost').value = ''; hidePanel(); repaint(); }
 async function loadPrices(){
   if(!acc || acc.level !== 'owner' || !tokenOk()) return;
   try{
     var j = await call('prices');
     if(!j.ok || !j.canSee) return;
-    PR = { loaded: true, sell: j.sell || {}, rate: Number(j.rate) || 0, rateAt: j.rateAt || '' };
+    PR = { loaded: true, sell: j.sell || {}, cost: j.cost || {}, rate: Number(j.rate) || 0, rateAt: j.rateAt || '' };
     paintRate(); repaint();
     if(curItem) showPanel(curItem);
   }catch(e){ /* offline: prices stay hidden until the next try */ }
@@ -2311,51 +2314,72 @@ function famMembers(it){
   });
   return keys;
 }
-function riel(){
-  var p = parseUsd($('pSell').value), r = $('pRiel');
-  if(!p || p.clear){ r.textContent = PR.rate ? '' : 'Set today’s rate in Account to see riel.'; return; }
-  r.textContent = PR.rate ? '= ' + riels(rielOf(p.v, PR.rate)) + ' (rate ' + PR.rate + ')' : 'Set today’s rate in Account to see riel.';
+function rielNote(id, txt){
+  var p = parseUsd(txt), r = $(id);
+  if(!p || p.clear){ r.textContent = (id === 'pRiel' && !PR.rate) ? 'Set today’s rate in Account to see riel.' : ''; return; }
+  r.textContent = PR.rate ? '= ' + riels(rielOf(p.v, PR.rate)) + ' (rate ' + PR.rate + ')' : (id === 'pRiel' ? 'Set today’s rate in Account to see riel.' : '');
 }
+function riel(){ rielNote('pRiel', $('pSell').value); rielNote('cRiel', $('pCost').value); }
 function showPanel(it){
   var on = !!acc && acc.level === 'owner' && PR.loaded;
   $('pricePanel').hidden = !on;
   if(!on) return;
-  var v = PR.sell[keyOf(it)];
+  var k = keyOf(it), v = PR.sell[k], c = PR.cost[k];
   $('pSell').value = (v === undefined || v === null) ? '' : String(v);
+  $('pCost').value = (c === undefined || c === null) ? '' : String(c);
   famSure = ''; pmsg(''); riel();
   var n = famMembers(it).length;
   $('pFam').hidden = !(it.family && n > 1);
-  $('pFam').textContent = 'Use this price for the whole family (' + n + ' items)';
+  $('pFam').textContent = 'Use these prices for the whole family (' + n + ' items)';
 }
 function hidePanel(){ $('pricePanel').hidden = true; curItem = null; }
 window.__onEdit = function(it){ curItem = it; showPanel(it); };
-window.__onEditClose = function(){ curItem = null; $('pricePanel').hidden = true; };
-$('pSell').addEventListener('input', function(){ famSure = ''; pmsg(''); riel(); });
+window.__onEditClose = function(){ curItem = null; $('pricePanel').hidden = true; $('pCost').value = ''; $('pSell').value = ''; };
+['pSell','pCost'].forEach(function(id){ $(id).addEventListener('input', function(){ famSure = ''; pmsg(''); riel(); }); });
 var PREASON = { signin: 'Your sign in ended. Tap Sign in at the top.', not_allowed: 'Only owners can change prices.', bad_price: 'That price does not look right.', bad_key: 'This item cannot have a price.' };
-async function sendSell(cmd, extra, okText){
+async function send(field, keys, value){
+  var one = keys.length === 1;
+  var cmd = (field === 'sell' ? 'setSell' : 'setCost') + (one ? '' : 'Many');
+  var extra = one ? { key: keys[0] } : { keys: keys }; extra[field] = value;
+  var j = await call(cmd, extra);
+  if(!j.ok) throw new Error(j.reason || 'unknown');
+  var store = field === 'sell' ? PR.sell : PR.cost;
+  Object.keys(j.changed || {}).forEach(function(k){ if(j.changed[k] === null) delete store[k]; else store[k] = j.changed[k]; });
+}
+async function sendAll(jobs, okText){
   if(!tokenOk()){ pmsg('Your sign in ended. Tap Sign in at the top, then try again.', true); return; }
   pmsg('Saving…');
   try{
-    var j = await call(cmd, extra);
-    if(!j.ok){ pmsg(PREASON[j.reason] || 'Something went wrong.', true); return; }
-    Object.keys(j.changed || {}).forEach(function(k){ if(j.changed[k] === null) delete PR.sell[k]; else PR.sell[k] = j.changed[k]; });
+    for(var i = 0; i < jobs.length; i++) await send(jobs[i][0], jobs[i][1], jobs[i][2]);
     pmsg(okText); riel(); repaint();
-  }catch(e){ pmsg('Cannot reach the server. Nothing was changed.', true); }
+  }catch(e){ pmsg(e && e.message && PREASON[e.message] ? PREASON[e.message] : 'Cannot save. Nothing may have been changed. Try again.', true); }
+}
+function readBoth(){
+  var s = parseUsd($('pSell').value), c = parseUsd($('pCost').value);
+  if(!s || !c){ pmsg('Type prices like 5.50', true); return null; }
+  return { s: s, c: c };
 }
 $('pSave').addEventListener('click', function(){
   if(!curItem) return;
-  var p = parseUsd($('pSell').value);
-  if(!p){ pmsg('Type the price like 5.50', true); return; }
-  sendSell('setSell', { key: keyOf(curItem), sell: p.clear ? null : p.v }, p.clear ? 'Price removed.' : 'Price saved.');
+  var both = readBoth(); if(!both) return;
+  var k = keyOf(curItem), jobs = [], oldS = PR.sell[k], oldC = PR.cost[k];
+  var newS = both.s.clear ? null : both.s.v, newC = both.c.clear ? null : both.c.v;
+  if(newS !== (oldS === undefined ? null : oldS)) jobs.push(['sell', [k], newS]);
+  if(newC !== (oldC === undefined ? null : oldC)) jobs.push(['cost', [k], newC]);
+  if(!jobs.length){ pmsg('Nothing changed.'); return; }
+  sendAll(jobs, 'Prices saved.');
 });
 $('pFam').addEventListener('click', function(){
   if(!curItem) return;
-  var p = parseUsd($('pSell').value);
-  if(!p || p.clear){ pmsg('Type the price first, like 5.50', true); return; }
-  var keys = famMembers(curItem);
-  if(famSure !== String(p.v)){ famSure = String(p.v); pmsg('Tap again to set ' + money(p.v) + ' for all ' + keys.length + ' items in this family.'); return; }
+  var both = readBoth(); if(!both) return;
+  var keys = famMembers(curItem), jobs = [], words = [];
+  if(!both.s.clear){ jobs.push(['sell', keys, both.s.v]); words.push('sell ' + money(both.s.v)); }
+  if(!both.c.clear){ jobs.push(['cost', keys, both.c.v]); words.push('cost ' + money(both.c.v)); }
+  if(!jobs.length){ pmsg('Type a price first, like 5.50. An empty box is left as it is.', true); return; }
+  var sig = words.join('|');
+  if(famSure !== sig){ famSure = sig; pmsg('Tap again to set ' + words.join(' and ') + ' for all ' + keys.length + ' items in this family. An empty box is left as it is.'); return; }
   famSure = '';
-  sendSell('setSellMany', { keys: keys, sell: p.v }, 'Price saved for ' + keys.length + ' items.');
+  sendAll(jobs, 'Saved for ' + keys.length + ' items.');
 });
 $('rateSave').addEventListener('click', async function(){
   var t = $('rateIn').value.replace(/[,\s]/g, '');
