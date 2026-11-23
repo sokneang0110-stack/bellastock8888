@@ -154,6 +154,7 @@ button,input{font:inherit;color:inherit}
 .code.none{font-family:var(--font-body);font-style:italic}
 .exp{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
 .price{font-size:13px;font-weight:700;color:var(--good);font-variant-numeric:tabular-nums}
+.price.cost{color:var(--warn)}
 .exp.expired{color:var(--danger);font-weight:600}
 .exp.soon{color:var(--warn);font-weight:600}
 a.btn{text-decoration:none}
@@ -1508,6 +1509,7 @@ function rowEl(it){
   info.appendChild(el('span', 'name', it.name || 'Untitled'));
   info.appendChild(el('span', 'code' + (it.barcode ? '' : ' none'), it.barcode || 'No barcode'));
   var pl = window.__priceLabel ? window.__priceLabel(it) : ''; if(pl) info.appendChild(el('span', 'price', pl));
+  var cl = window.__costLabel ? window.__costLabel(it) : ''; if(cl) info.appendChild(el('span', 'price cost', cl));
   if(!it.expiry && it.noExpiry){ info.appendChild(el('span', 'exp', 'No expiration date')); }
   if(it.expiry){
     var st = expiryState(it.expiry);
@@ -1536,6 +1538,7 @@ function autoRowEl(g){
   info.appendChild(el('span', 'name', lines[0].name || 'Untitled'));
   info.appendChild(el('span', 'code', lines[0].barcode));
   var pl = window.__priceLabel ? window.__priceLabel(lines[0]) : ''; if(pl) info.appendChild(el('span', 'price', pl));
+  var cl = window.__costLabel ? window.__costLabel(lines[0]) : ''; if(cl) info.appendChild(el('span', 'price cost', cl));
   var st = first ? expiryState(first) : '';
   info.appendChild(el('span', 'exp' + (st ? ' ' + st : ''), lines.length + ' expiry dates' + (st === 'expired' ? ' · one expired' : (st === 'soon' ? ' · one soon' : ''))));
   var q = el('div', 'qty');
@@ -2276,7 +2279,12 @@ function priceText(usd){ return money(usd) + (PR.rate ? ' · ' + riels(rielOf(us
 window.__priceLabel = function(it){
   if(!PR.loaded) return '';
   var v = PR.sell[keyOf(it)];
-  return (v === undefined || v === null) ? '' : priceText(v);
+  return (v === undefined || v === null) ? '' : 'Sell ' + priceText(v);
+};
+window.__costLabel = function(it){
+  if(!PR.loaded) return '';
+  var v = PR.cost[keyOf(it)];
+  return (v === undefined || v === null) ? '' : 'Cost ' + priceText(v);
 };
 function repaint(){ try{ if(window.__rerender) window.__rerender(); }catch(e){} }
 function clearPrices(){ PR = { loaded: false, sell: {}, cost: {}, rate: 0, rateAt: '' }; $('pCost').value = ''; hidePanel(); repaint(); }
