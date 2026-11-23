@@ -411,9 +411,11 @@ input:disabled:not(.cal){opacity:.5}
       </div>
       <div class="field">
         <label for="eFamily">Family (optional)</label>
-        <input id="eFamily" type="text" list="familyList" autocomplete="off" placeholder="Example: 3CE Blur Water Tint">
-        <datalist id="familyList"></datalist>
-        <span class="tiny">Items with the same family name are shown together in the list.</span>
+        <div class="combo">
+          <input id="eFamily" type="text" autocomplete="off" autocapitalize="words" spellcheck="false" placeholder="Tap to pick a family" aria-label="Family">
+          <div class="drop" id="famDrop" role="listbox" aria-label="Family list" hidden></div>
+        </div>
+        <span class="tiny">Items with the same family are shown together in the list.</span>
       </div>
       <div class="field">
         <span class="label">Barcode</span>
@@ -847,12 +849,54 @@ function inheritFamily(code){
   return '';
 }
 var openFam = new Set();
-function refreshFamilyList(){
-  var names = {};
-  items.forEach(function(it){ if(it.family){ var k = famKey(it.family); if(!names[k]) names[k] = it.family; } });
-  var dl = $('familyList'); dl.replaceChildren();
-  Object.keys(names).sort().forEach(function(k){ var o = document.createElement('option'); o.value = names[k]; dl.appendChild(o); });
+var famNew = '';   // a new family name the person confirmed with "Create new family"
+function familyCounts(){
+  var m = {};
+  items.forEach(function(it){
+    if(!it.family) return;
+    var k = famKey(it.family), o = m[k] || (m[k] = { name: it.family, codes: {} });
+    o.codes[it.barcode || it.id] = 1;
+  });
+  return Object.keys(m).map(function(k){ return { key: k, name: m[k].name, shades: Object.keys(m[k].codes).length }; })
+    .sort(function(x, y){ return x.name.toLowerCase().localeCompare(y.name.toLowerCase()); });
 }
+function hideFamDrop(){ $('famDrop').hidden = true; }
+function showFamDrop(){
+  var box = $('famDrop'), inp = $('eFamily');
+  if(document.activeElement !== inp){ box.hidden = true; return; }
+  var q = inp.value.trim(), qk = famKey(q), all = familyCounts(), frag = document.createDocumentFragment();
+  var add = function(text, act, name){ var o = el('button', 'opt', text); o.type = 'button'; o.dataset.act = act; if(name) o.dataset.name = name; o.setAttribute('role', 'option'); frag.appendChild(o); };
+  if(!q) add('No family', 'none');
+  var list = qk ? all.filter(function(f){ return f.key.indexOf(qk) >= 0; }) : all;
+  list.forEach(function(f){ add(f.name + ' · ' + f.shades + (f.shades === 1 ? ' shade' : ' shades'), 'pick', f.name); });
+  if(q && !all.some(function(f){ return f.key === qk; })) add('Create new family: ' + q, 'new', q);
+  if(!q && !all.length) frag.appendChild(el('div', 'note', 'No families yet. Type a name to create the first one.'));
+  box.replaceChildren(frag); box.scrollTop = 0; box.hidden = false;
+}
+function pickFamily(act, name){
+  var inp = $('eFamily');
+  if(act === 'none'){ inp.value = ''; famNew = ''; }
+  else if(act === 'new'){ inp.value = name; famNew = famKey(name); }
+  else { inp.value = name; famNew = ''; }
+  hideFamDrop();
+}
+$('eFamily').addEventListener('focus', function(){
+  showFamDrop();
+  setTimeout(function(){ try{ $('eFamily').scrollIntoView({ block: 'center', behavior: 'smooth' }); }catch(e){} }, 250);
+});
+$('eFamily').addEventListener('input', function(){ famNew = ''; showFamDrop(); });
+$('eFamily').addEventListener('keydown', function(e){
+  if(e.key !== 'Enter' || $('famDrop').hidden) return;
+  e.preventDefault();
+  var opts = $('famDrop').querySelectorAll('.opt');
+  if(opts.length === 1) pickFamily(opts[0].dataset.act, opts[0].dataset.name);
+});
+$('famDrop').addEventListener('click', function(e){
+  var b = e.target.closest ? e.target.closest('.opt') : null;
+  if(b) pickFamily(b.dataset.act, b.dataset.name);
+});
+$('famDrop').addEventListener('mousedown', function(e){ e.preventDefault(); });
+$('eFamily').addEventListener('blur', hideFamDrop);
 
 /* saving */
 async function saveItem(o){
@@ -1514,7 +1558,7 @@ function openSheet(id){
   setPhotoState(sheetPhoto, null);
   $('eName').value = it.name || '';
   $('eFamily').value = it.family || '';
-  refreshFamilyList();
+  famNew = ''; hideFamDrop();
   $('eBarcode').textContent = it.barcode || 'No barcode';
   $('eQty').value = it.qty;
   setExpiry('eExpiry', it.expiry || '');
@@ -1548,6 +1592,11 @@ $('sheetForm').addEventListener('submit', async function(e){
   if(!it){ closeSheet(); return; }
   var name = $('eName').value.trim(), qty = parseQty($('eQty').value);
   var fam = $('eFamily').value.trim();
+  if(fam){
+    var exf = familyCounts().filter(function(f){ return f.key === famKey(fam); })[0];
+    if(exf) fam = exf.name;
+    else if(famNew !== famKey(fam)){ fail(err, 'Pick a family from the list, or tap "Create new family".', $('eFamily')); showFamDrop(); return; }
+  }
   if(!name){ fail(err, 'Enter the product name.', $('eName')); return; }
   if(qty === null){ fail(err, 'Enter the quantity.', $('eQty')); return; }
   var noE = noExp.eExpiry, expiry = '';
