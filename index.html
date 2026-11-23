@@ -1440,7 +1440,7 @@ function famEl(g, force){
   var b = el('button', 'row famhead'); b.type = 'button'; b.dataset.fam = g.key; b.setAttribute('aria-expanded', open ? 'true' : 'false');
   var info = el('div', 'info');
   info.appendChild(el('span', 'name', g.name));
-  info.appendChild(el('span', 'tiny', fmt(codes.length) + (codes.length === 1 ? ' shade' : ' shades') + ' · ' + fmt(lines.length) + (lines.length === 1 ? ' line' : ' lines')));
+  info.appendChild(el('span', 'tiny', g.auto ? fmt(lines.length) + ' expiry dates' : fmt(codes.length) + (codes.length === 1 ? ' shade' : ' shades') + ' · ' + fmt(lines.length) + (lines.length === 1 ? ' line' : ' lines')));
   var q = el('div', 'qty');
   q.appendChild(el('span', 'num', fmt(units)));
   q.appendChild(el('span', 'tiny', units === 1 ? 'unit' : 'units'));
@@ -1450,7 +1450,7 @@ function famEl(g, force){
   var ul = el('ul', 'shades'); ul.hidden = !open;
   codes.forEach(function(k){
     var ls = byCode[k];
-    if(ls.length > 1){
+    if(ls.length > 1 && !g.auto){
       var t = 0; ls.forEach(function(l){ t += Number(l.qty) || 0; });
       var h = el('li', 'shade-h', ls[0].name + ' · ' + fmt(t) + (t === 1 ? ' unit' : ' units') + ' in ' + ls.length + ' lots');
       ul.appendChild(h);
@@ -1472,12 +1472,14 @@ function renderList(){
   }
   var all = Array.from(items.values());
   var hit = function(i){ return !q || (i.name || '').toLowerCase().indexOf(q) >= 0 || (i.barcode || '').toLowerCase().indexOf(q) >= 0 || (i.brand || '').toLowerCase().indexOf(q) >= 0 || (i.batchCode || '').toLowerCase().indexOf(q) >= 0 || (i.family || '').toLowerCase().indexOf(q) >= 0; };
-  var groups = new Map(), entries = [];
+  var groups = new Map(), entries = [], bcCount = {};
+  all.forEach(function(it){ if(!it.family && it.barcode) bcCount[it.barcode] = (bcCount[it.barcode] || 0) + 1; });
   all.forEach(function(it){
-    var k = it.family ? famKey(it.family) : '';
+    var k = it.family ? famKey(it.family) : '', auto = false;
+    if(!k && it.barcode && bcCount[it.barcode] > 1){ k = 'bc:' + it.barcode; auto = true; }
     if(!k){ if(hit(it)) entries.push({ sort: (it.name || '').toLowerCase(), item: it }); return; }
     var g = groups.get(k);
-    if(!g){ g = { key: k, name: it.family, lines: [], hit: false }; groups.set(k, g); }
+    if(!g){ g = { key: k, name: it.family || it.name, lines: [], hit: false, auto: auto }; groups.set(k, g); }
     g.lines.push(it);
     if(hit(it)) g.hit = true;
   });
