@@ -183,6 +183,13 @@ input:disabled:not(.cal){opacity:.5}
 .chip.del{border-color:var(--danger);color:var(--danger);background:transparent}
 .chip.del::after{content:" ×"}
 .tiny{font-size:12px;color:var(--muted)}
+.fam{display:block}
+.row.famhead{border-color:var(--accent)}
+.famhead .chev{display:inline-block;font-size:12px;color:var(--muted);transition:transform .15s}
+.fam.open .famhead .chev{transform:rotate(180deg)}
+.shades{list-style:none;margin:6px 0 2px 14px;padding:0 0 0 10px;border-left:2px solid var(--line);display:flex;flex-direction:column;gap:6px}
+.shades[hidden]{display:none}
+.shade-h{font-size:12px;font-weight:600;color:var(--muted);padding:6px 4px 0}
 .qty{display:flex;flex-direction:column;align-items:flex-end;gap:2px}
 .num{font-family:var(--font-display);font-weight:700;font-size:24px;font-variant-numeric:tabular-nums;line-height:1}
 .pill{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--danger);border:1px solid var(--danger);border-radius:999px;padding:1px 7px}
@@ -401,6 +408,12 @@ input:disabled:not(.cal){opacity:.5}
       <div class="field">
         <label for="eName">Product name</label>
         <input id="eName" type="text" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="eFamily">Family (optional)</label>
+        <input id="eFamily" type="text" list="familyList" autocomplete="off" placeholder="Example: 3CE Blur Water Tint">
+        <datalist id="familyList"></datalist>
+        <span class="tiny">Items with the same family name are shown together in the list.</span>
       </div>
       <div class="field">
         <span class="label">Barcode</span>
@@ -826,6 +839,21 @@ async function handlePhoto(input, state, paint){
   catch(e){ toast('Could not use that photo. Try another one.'); }
 }
 
+/* families */
+function famKey(x){ return String(x || '').trim().toLowerCase(); }
+function inheritFamily(code){
+  var l = lotsFor(code);
+  for(var i = 0; i < l.length; i++){ if(l[i].family) return l[i].family; }
+  return '';
+}
+var openFam = new Set();
+function refreshFamilyList(){
+  var names = {};
+  items.forEach(function(it){ if(it.family){ var k = famKey(it.family); if(!names[k]) names[k] = it.family; } });
+  var dl = $('familyList'); dl.replaceChildren();
+  Object.keys(names).sort().forEach(function(k){ var o = document.createElement('option'); o.value = names[k]; dl.appendChild(o); });
+}
+
 /* saving */
 async function saveItem(o){
   var col = db.collection('items');
@@ -841,8 +869,9 @@ async function saveItem(o){
     } else photoSkipped = true;
   }
   var now = new Date().toISOString();
+  var family = o.family !== undefined ? String(o.family || '').trim() : ((o.existing && o.existing.family) || inheritFamily(o.barcode));
   try{
-    await withTimeout(ref.set({ name: o.name, barcode: o.barcode || '', qty: o.qty, expiry: o.expiry || '', noExpiry: !!o.noExpiry, brand: o.brand || '', batchCode: o.batchCode || '', expirySource: o.expirySource || '', photoId: photoId, createdAt: (o.existing && o.existing.createdAt) || now, updatedAt: now }), 20000);
+    await withTimeout(ref.set({ name: o.name, barcode: o.barcode || '', qty: o.qty, expiry: o.expiry || '', noExpiry: !!o.noExpiry, brand: o.brand || '', batchCode: o.batchCode || '', expirySource: o.expirySource || '', family: family, photoId: photoId, createdAt: (o.existing && o.existing.createdAt) || now, updatedAt: now }), 20000);
   }catch(ex){
     if(newPhoto && assets){ try{ await assets.delete(newPhoto); }catch(e){} }
     throw ex;
@@ -1343,6 +1372,50 @@ function renderTotals(){
   $('totals').textContent = fmt(prods.size) + (prods.size === 1 ? ' item' : ' items') + ' · ' + fmt(units) + (units === 1 ? ' unit' : ' units');
   $('tabCount').textContent = fmt(items.size);
 }
+function lineCmp(a, b){ return (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase()) || (a.barcode || '').localeCompare(b.barcode || '') || (a.expiry || '9999').localeCompare(b.expiry || '9999'); }
+function thumbEl(photoId){
+  var thumb;
+  if(photoId){
+    thumb = el('img', 'thumb'); thumb.alt = ''; thumb.loading = 'lazy'; thumb.decoding = 'async'; thumb.src = window.__photoUrl(photoId);
+    thumb.addEventListener('error', function(){ thumb.removeAttribute('src'); thumb.classList.add('ph'); });
+  } else thumb = el('div', 'thumb ph');
+  return thumb;
+}
+function famEl(g, force){
+  var lines = g.lines.slice().sort(lineCmp);
+  var units = 0, codes = [], seen = {}, photo = null, byCode = {};
+  lines.forEach(function(l){
+    units += Number(l.qty) || 0;
+    var k = l.barcode || l.id;
+    if(!seen[k]){ seen[k] = true; codes.push(k); byCode[k] = []; }
+    byCode[k].push(l);
+    if(!photo && l.photoId) photo = l.photoId;
+  });
+  var open = !!force || openFam.has(g.key);
+  var li = el('li', 'fam' + (open ? ' open' : '')); li.dataset.fam = g.key;
+  var b = el('button', 'row famhead'); b.type = 'button'; b.dataset.fam = g.key; b.setAttribute('aria-expanded', open ? 'true' : 'false');
+  var info = el('div', 'info');
+  info.appendChild(el('span', 'name', g.name));
+  info.appendChild(el('span', 'tiny', fmt(codes.length) + (codes.length === 1 ? ' shade' : ' shades') + ' · ' + fmt(lines.length) + (lines.length === 1 ? ' line' : ' lines')));
+  var q = el('div', 'qty');
+  q.appendChild(el('span', 'num', fmt(units)));
+  q.appendChild(el('span', 'tiny', units === 1 ? 'unit' : 'units'));
+  q.appendChild(el('span', 'chev', '▼'));
+  b.appendChild(thumbEl(photo)); b.appendChild(info); b.appendChild(q);
+  li.appendChild(b);
+  var ul = el('ul', 'shades'); ul.hidden = !open;
+  codes.forEach(function(k){
+    var ls = byCode[k];
+    if(ls.length > 1){
+      var t = 0; ls.forEach(function(l){ t += Number(l.qty) || 0; });
+      var h = el('li', 'shade-h', ls[0].name + ' · ' + fmt(t) + (t === 1 ? ' unit' : ' units') + ' in ' + ls.length + ' lots');
+      ul.appendChild(h);
+    }
+    ls.forEach(function(l){ ul.appendChild(rowEl(l)); });
+  });
+  li.appendChild(ul);
+  return li;
+}
 function renderList(){
   var ul = $('rows'), msg = $('listMsg'), more = $('moreBtn');
   var q = $('search').value.trim().toLowerCase();
@@ -1353,27 +1426,51 @@ function renderList(){
     $('msgBody').textContent = off ? 'Your items cannot be loaded in this view. See the note at the top of the page.' : 'This can take a moment on a slow connection.';
     return;
   }
-  var list = Array.from(items.values());
-  if(q) list = list.filter(function(i){ return (i.name || '').toLowerCase().indexOf(q) >= 0 || (i.barcode || '').toLowerCase().indexOf(q) >= 0 || (i.brand || '').toLowerCase().indexOf(q) >= 0 || (i.batchCode || '').toLowerCase().indexOf(q) >= 0; });
-  list.sort(function(a, b){ return (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase()) || (a.barcode || '').localeCompare(b.barcode || '') || (a.expiry || '9999').localeCompare(b.expiry || '9999'); });
+  var all = Array.from(items.values());
+  var hit = function(i){ return !q || (i.name || '').toLowerCase().indexOf(q) >= 0 || (i.barcode || '').toLowerCase().indexOf(q) >= 0 || (i.brand || '').toLowerCase().indexOf(q) >= 0 || (i.batchCode || '').toLowerCase().indexOf(q) >= 0 || (i.family || '').toLowerCase().indexOf(q) >= 0; };
+  var groups = new Map(), entries = [];
+  all.forEach(function(it){
+    var k = it.family ? famKey(it.family) : '';
+    if(!k){ if(hit(it)) entries.push({ sort: (it.name || '').toLowerCase(), item: it }); return; }
+    var g = groups.get(k);
+    if(!g){ g = { key: k, name: it.family, lines: [], hit: false }; groups.set(k, g); }
+    g.lines.push(it);
+    if(hit(it)) g.hit = true;
+  });
+  groups.forEach(function(g){ if(g.hit) entries.push({ sort: g.name.toLowerCase(), group: g }); });
+  entries.sort(function(a, b){
+    var c = a.sort.localeCompare(b.sort);
+    if(c) return c;
+    if(a.item && b.item) return lineCmp(a.item, b.item);
+    return a.group ? -1 : 1;
+  });
+  var lineCount = 0;
+  entries.forEach(function(e){ lineCount += e.group ? e.group.lines.length : 1; });
   var ln = function(n){ return fmt(n) + (n === 1 ? ' line' : ' lines'); };
-  $('listCount').textContent = q ? fmt(list.length) + ' of ' + ln(items.size) : ln(items.size);
+  $('listCount').textContent = q ? fmt(lineCount) + ' of ' + ln(items.size) : ln(items.size);
   var frag = document.createDocumentFragment();
-  list.slice(0, shown).forEach(function(it){ frag.appendChild(rowEl(it)); });
+  entries.slice(0, shown).forEach(function(e){ frag.appendChild(e.group ? famEl(e.group, !!q) : rowEl(e.item)); });
   ul.replaceChildren(frag);
-  if(!list.length){
+  if(!entries.length){
     msg.hidden = false;
     if(items.size === 0){ $('msgTitle').textContent = 'No items yet'; $('msgBody').textContent = 'Scan a barcode on the Add item tab to save your first item.'; }
     else { $('msgTitle').textContent = 'No matches'; $('msgBody').textContent = 'Nothing matches what you typed.'; }
   } else msg.hidden = true;
-  more.hidden = list.length <= shown;
-  more.textContent = 'Show more (' + fmt(list.length - shown) + ' left)';
+  more.hidden = entries.length <= shown;
+  more.textContent = 'Show more (' + fmt(entries.length - shown) + ' left)';
 }
 $('search').addEventListener('input', function(){ shown = 60; renderList(); });
 $('moreBtn').addEventListener('click', function(){ shown += 60; renderList(); });
 $('rows').addEventListener('click', function(e){
+  var h = e.target.closest ? e.target.closest('.famhead') : null;
+  if(h){
+    var k = h.dataset.fam, li = h.parentNode, ul2 = li.querySelector('.shades'), now = !openFam.has(k);
+    if(now) openFam.add(k); else openFam.delete(k);
+    li.classList.toggle('open', now); ul2.hidden = !now; h.setAttribute('aria-expanded', now ? 'true' : 'false');
+    return;
+  }
   var b = e.target.closest ? e.target.closest('.row') : null;
-  if(b) openSheet(b.dataset.id);
+  if(b && b.dataset.id) openSheet(b.dataset.id);
 });
 
 $('findBtn').addEventListener('click', function(){
@@ -1397,10 +1494,10 @@ function csvCell(v){ var s = String(v == null ? '' : v); return /[",\n\r]/.test(
 $('exportBtn').addEventListener('click', async function(){
   if(!downloads){ toast('Download is not available in this browser.'); return; }
   var rows = Array.from(items.values()).sort(function(a, b){ return (a.name || '').localeCompare(b.name || ''); });
-  var lines = ['Barcode,Name,Quantity,Expiry date,Date from,Brand,Batch code,Last updated'];
+  var lines = ['Barcode,Name,Quantity,Expiry date,Date from,Brand,Batch code,Last updated,Family'];
   rows.forEach(function(i){
     var code = i.barcode ? '="' + String(i.barcode).replace(/"/g, '') + '"' : '';
-    lines.push([code, i.name, i.qty, (i.expiry || (i.noExpiry ? 'No expiry' : '')), i.expirySource === 'batch' ? 'batch code' : '', i.brand, i.batchCode, i.updatedAt].map(csvCell).join(','));
+    lines.push([code, i.name, i.qty, (i.expiry || (i.noExpiry ? 'No expiry' : '')), i.expirySource === 'batch' ? 'batch code' : '', i.brand, i.batchCode, i.updatedAt, i.family || ''].map(csvCell).join(','));
   });
   try{
     await downloads.save({ filename: 'stock-count-' + new Date().toISOString().slice(0, 10) + '.csv', data: '﻿' + lines.join('\r\n') });
@@ -1416,6 +1513,8 @@ function openSheet(id){
   editId = id;
   setPhotoState(sheetPhoto, null);
   $('eName').value = it.name || '';
+  $('eFamily').value = it.family || '';
+  refreshFamilyList();
   $('eBarcode').textContent = it.barcode || 'No barcode';
   $('eQty').value = it.qty;
   setExpiry('eExpiry', it.expiry || '');
@@ -1448,6 +1547,7 @@ $('sheetForm').addEventListener('submit', async function(e){
   var it = items.get(editId), err = $('sheetError');
   if(!it){ closeSheet(); return; }
   var name = $('eName').value.trim(), qty = parseQty($('eQty').value);
+  var fam = $('eFamily').value.trim();
   if(!name){ fail(err, 'Enter the product name.', $('eName')); return; }
   if(qty === null){ fail(err, 'Enter the quantity.', $('eQty')); return; }
   var noE = noExp.eExpiry, expiry = '';
@@ -1461,7 +1561,14 @@ $('sheetForm').addEventListener('submit', async function(e){
   saving = true;
   var btn = $('sheetSave'); btn.disabled = true; btn.textContent = 'Saving…';
   try{
-    var r = await saveItem({ id: it.id, barcode: it.barcode, name: name, qty: qty, expiry: expiry, noExpiry: noE, brand: it.brand, batchCode: it.batchCode, expirySource: noE ? '' : (it.expiry === expiry ? it.expirySource : 'edited'), photoBlob: sheetPhoto.blob, existing: it });
+    var r = await saveItem({ id: it.id, barcode: it.barcode, name: name, qty: qty, expiry: expiry, noExpiry: noE, brand: it.brand, batchCode: it.batchCode, expirySource: noE ? '' : (it.expiry === expiry ? it.expirySource : 'edited'), family: fam, photoBlob: sheetPhoto.blob, existing: it });
+    if(it.barcode && fam !== (it.family || '')){
+      var sib = Array.from(items.values()).filter(function(x){ return x.id !== it.id && x.barcode === it.barcode && (x.family || '') !== fam; });
+      for(var si = 0; si < sib.length; si++){
+        var x = sib[si];
+        await saveItem({ id: x.id, barcode: x.barcode, name: x.name, qty: x.qty, expiry: x.expiry, noExpiry: x.noExpiry, brand: x.brand, batchCode: x.batchCode, expirySource: x.expirySource, family: fam, existing: x });
+      }
+    }
     closeSheet();
     toast(r.photoSkipped ? 'Saved, but the photo could not be stored. Try the photo again.' : 'Saved ' + name + ' · ' + fmt(qty));
   }catch(ex){
@@ -1546,7 +1653,7 @@ function startSync(){
     items.clear();
     snap.docs.forEach(function(d){
       var v = d.data() || {};
-      items.set(d.id, { id: d.id, name: v.name || '', barcode: v.barcode || '', qty: Number(v.qty) || 0, expiry: v.expiry || '', noExpiry: !!v.noExpiry, brand: v.brand || '', batchCode: v.batchCode || '', expirySource: v.expirySource || '', photoId: v.photoId || null, createdAt: v.createdAt || '', updatedAt: v.updatedAt || '' });
+      items.set(d.id, { id: d.id, name: v.name || '', barcode: v.barcode || '', qty: Number(v.qty) || 0, expiry: v.expiry || '', noExpiry: !!v.noExpiry, brand: v.brand || '', batchCode: v.batchCode || '', expirySource: v.expirySource || '', family: v.family || '', photoId: v.photoId || null, createdAt: v.createdAt || '', updatedAt: v.updatedAt || '' });
     });
     gotSnapshot = true;
     if(!snap.metadata.fromCache){ clearTimeout(slow); setSync('ok', 'Saved on this phone'); $('banner').hidden = true; }
@@ -1628,7 +1735,7 @@ var _setSync = window.setSync;
 window.setSync = function(state, text){ _setSync(state, text); if(state === 'ok') topLabel(); };
 function tag(){ var u = get(K_URL), n = queue().length; $('syncTag').textContent = !u ? 'Not set up' : (n ? n + ' waiting to send' : 'On'); topLabel(); }
 function rowOf(id, v){
-  return { id: id, barcode: v.barcode || '', name: v.name || '', qty: v.qty, expiry: v.expiry || '', noExpiry: !!v.noExpiry, brand: v.brand || '', batchCode: v.batchCode || '', expirySource: v.expirySource || '', updatedAt: v.updatedAt || '', photoId: v.photoId || '' };
+  return { id: id, barcode: v.barcode || '', name: v.name || '', qty: v.qty, expiry: v.expiry || '', noExpiry: !!v.noExpiry, brand: v.brand || '', batchCode: v.batchCode || '', expirySource: v.expirySource || '', family: v.family || '', updatedAt: v.updatedAt || '', photoId: v.photoId || '' };
 }
 var busy = false;
 async function flush(){
@@ -1642,7 +1749,7 @@ async function flush(){
     while(q.length){
       var batch = q.slice(0, 80);
       await fetch(url, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ phone: dev, ops: batch }) });
-      q = q.slice(batch.length); setQ(q); tag();
+      q = queue().slice(batch.length); setQ(q); tag();   // re-read: new changes may have been added while sending
     }
     say('Sent to your sheet at ' + new Date().toLocaleTimeString() + '. Open the sheet to check.', 'good');
   }catch(e){ say('No internet right now. It will send when you are back online.', 'bad'); }
@@ -1772,6 +1879,7 @@ async function pull(){
       sets.push({ id: r.id, v: {
         name: r.name || '', barcode: r.barcode || '', qty: Number(r.qty) || 0, expiry: r.expiry || '', noExpiry: !!r.noExpiry,
         brand: r.brand || '', batchCode: r.batchCode || '', expirySource: r.expirySource || '',
+        family: r.family !== undefined ? (r.family || '') : ((l && l.family) || ''),
         updatedAt: ru || new Date().toISOString(), createdAt: (l && l.createdAt) || ru || new Date().toISOString(), photoId: (have ? want : (l && l.photoId)) || null
       } });
       added++;
