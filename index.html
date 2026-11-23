@@ -530,7 +530,6 @@ input:disabled:not(.cal){opacity:.5}
           <span class="tiny" id="pRiel"></span>
           <label class="tiny" for="pCost">Cost price (USD). Only owners can see this.</label>
           <input id="pCost" type="text" inputmode="decimal" autocomplete="off" placeholder="For example 3.20" aria-label="Cost price in US dollars">
-          <span class="tiny" id="cRiel"></span>
           <span class="pprofit" id="pProfit" role="status"></span>
           <button type="button" class="btn btn-quiet btn-small" id="pFam" hidden>Use this price for the whole family</button>
           <span class="tiny" id="pMsg" role="status"></span>
@@ -2290,7 +2289,7 @@ window.__priceLabel = function(it){
 window.__costLabel = function(it){
   if(!PR.loaded) return '';
   var v = PR.cost[keyOf(it)];
-  return (v === undefined || v === null) ? '' : 'Cost ' + priceText(v);
+  return (v === undefined || v === null) ? '' : 'Cost ' + money(v);
 };
 function repaint(){ try{ if(window.__rerender) window.__rerender(); }catch(e){} }
 function clearPrices(){ PR = { loaded: false, sell: {}, cost: {}, rate: 0, rateAt: '' }; $('pCost').value = ''; hidePanel(); repaint(); }
@@ -2341,7 +2340,7 @@ function profitNote(){
   var usd = cents / 100, keep = s.v > 0 ? Math.round(cents / Math.round(s.v * 100) * 100) : 0;
   el_.textContent = 'Profit: ' + money(usd) + ' each' + (PR.rate ? ' (' + riels(rielOf(usd, PR.rate)) + ')' : '') + '. You keep ' + keep + ' cents of every $1 you sell.';
 }
-function riel(){ rielNote('pRiel', $('pSell').value); rielNote('cRiel', $('pCost').value); profitNote(); }
+function riel(){ rielNote('pRiel', $('pSell').value); profitNote(); }
 function showPanel(it){
   var on = !!acc && acc.level === 'owner' && PR.loaded;
   $('pricePanel').hidden = !on;
