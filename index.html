@@ -594,6 +594,7 @@ input:disabled:not(.cal){opacity:.5}
 var NAME = 'stockroom-count', STORES = ['items', 'brands', 'batches', 'assets'];
 var idb = null, mem = { items: new Map(), brands: new Map(), batches: new Map() }, subs = { items: [], brands: [], batches: [] };
 var urls = new Map();
+var THUMBS = {}, thumbBusy = false;
 function err(code, message){ var e = new Error(message || code); e.code = code; return e; }
 function open(){
   return new Promise(function(res, rej){
@@ -615,21 +616,64 @@ async function loadAll(){
     var n = STORES[i], keys = await wrap(store(n, 'readonly').getAllKeys()), vals = await wrap(store(n, 'readonly').getAll());
     keys.forEach(function(k, j){ mem[n].set(k, vals[j]); });
   }
+  try{ var tt = await wrap(store('assets', 'readonly').get('__thumbs')); if(tt && typeof tt === 'object') THUMBS = tt; }catch(e){}
   loadAssets();
 }
 var assetsDone = null;
 window.__assetsReady = new Promise(function(r){ assetsDone = r; });
 async function loadAssets(){
   try{
-    var ak = await wrap(store('assets', 'readonly').getAllKeys());
+    var ak = (await wrap(store('assets', 'readonly').getAllKeys())).filter(function(k){ return k !== '__thumbs'; });
     for(var i = 0; i < ak.length; i += 24){
       var chunk = ak.slice(i, i + 24);
       var blobs = await Promise.all(chunk.map(function(k){ return wrap(store('assets', 'readonly').get(k)); }));
       chunk.forEach(function(k, j){ if(blobs[j] && !urls.has(k)){ try{ urls.set(k, URL.createObjectURL(blobs[j])); }catch(e){} } });
-      notify('items');
+      if(chunk.some(function(k){ return !THUMBS[k]; })) notify('items');
     }
   }catch(e){}
   assetsDone(true);
+  fillThumbs();
+}
+function makeThumb(blob){
+  return new Promise(function(res){
+    var u = null;
+    try{ u = URL.createObjectURL(blob); }catch(e){ return res(''); }
+    var im = new Image();
+    im.onload = function(){
+      var out = '';
+      try{
+        var k = Math.min(1, 160 / Math.max(im.naturalWidth, im.naturalHeight));
+        var c = document.createElement('canvas'); c.width = Math.max(1, Math.round(im.naturalWidth * k)); c.height = Math.max(1, Math.round(im.naturalHeight * k));
+        c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+        out = c.toDataURL('image/jpeg', 0.65);
+      }catch(e){}
+      URL.revokeObjectURL(u); res(out);
+    };
+    im.onerror = function(){ URL.revokeObjectURL(u); res(''); };
+    im.src = u;
+  });
+}
+async function saveThumbs(){
+  try{ var tx = idb.transaction('assets', 'readwrite'); tx.objectStore('assets').put(THUMBS, '__thumbs'); await done(tx); }catch(e){}
+}
+function addThumb(id, blob){
+  makeThumb(blob).then(function(t){ if(t){ THUMBS[id] = t; saveThumbs(); notify('items'); } });
+}
+async function fillThumbs(){
+  if(thumbBusy) return; thumbBusy = true;
+  try{
+    var ids = Array.from(urls.keys()).filter(function(id){ return !THUMBS[id]; }), n = 0;
+    for(var i = 0; i < ids.length; i++){
+      var bl = await wrap(store('assets', 'readonly').get(ids[i]));
+      if(!bl) continue;
+      var t = await makeThumb(bl);
+      if(t){ THUMBS[ids[i]] = t; n++; }
+      if(n && n % 40 === 0){ await saveThumbs(); notify('items'); }
+      await new Promise(function(r){ setTimeout(r, 12); });
+    }
+    if(n){ await saveThumbs(); notify('items'); }
+  }catch(e){}
+  thumbBusy = false;
 }
 var ready = null;
 function init(){ if(!ready) ready = loadAll().then(function(){ return true; }, function(){ return false; }); return ready; }
@@ -689,7 +733,7 @@ var assets = {
     var id = 'p' + newId();
     var tx = idb.transaction('assets', 'readwrite'); tx.objectStore('assets').put(blob, id);
     await done(tx);
-    var url = URL.createObjectURL(blob); urls.set(id, url);
+    var url = URL.createObjectURL(blob); urls.set(id, url); addThumb(id, blob);
     return { id: id, url: url, sizeBytes: blob.size, contentType: blob.type };
   },
   getBlob: async function(id){ return await wrap(store('assets', 'readonly').get(id)); },
@@ -697,12 +741,13 @@ var assets = {
     var tx = idb.transaction('assets', 'readwrite'); tx.objectStore('assets').put(blob, id);
     await done(tx);
     var old = urls.get(id); if(old){ try{ URL.revokeObjectURL(old); }catch(e){} }
-    urls.set(id, URL.createObjectURL(blob));
+    urls.set(id, URL.createObjectURL(blob)); addThumb(id, blob);
   },
   delete: async function(id){
     var tx = idb.transaction('assets', 'readwrite'); tx.objectStore('assets').delete(id);
     await done(tx);
     var u = urls.get(id); if(u){ try{ URL.revokeObjectURL(u); }catch(e){} urls.delete(id); }
+    if(THUMBS[id]){ delete THUMBS[id]; saveThumbs(); }
   }
 };
 var downloads = {
@@ -716,6 +761,7 @@ var downloads = {
   }
 };
 window.__photoUrl = function(id){ return urls.get(id) || ''; };
+window.__thumbUrl = function(id){ return THUMBS[id] || urls.get(id) || ''; };
 window.__sheetUrl = 'https://script.google.com/macros/s/AKfycbyh3kOsTohPHk8TxbS8Lr1_aM7kCySacEZ_wFXC5JFspQ4LTW4dK4MOqU3OL73rHeLhRA/exec';
 window.claude = {
   use: async function(name){
@@ -1505,7 +1551,7 @@ function rowEl(it){
   var b = el('button', 'row'); b.type = 'button'; b.dataset.id = it.id;
   var thumb;
   if(it.photoId){
-    thumb = el('img', 'thumb'); thumb.alt = ''; thumb.loading = 'lazy'; thumb.decoding = 'async'; thumb.src = window.__photoUrl(it.photoId);
+    thumb = el('img', 'thumb'); thumb.alt = ''; thumb.loading = 'lazy'; thumb.decoding = 'async'; thumb.src = window.__thumbUrl(it.photoId);
     thumb.addEventListener('error', function(){ thumb.removeAttribute('src'); thumb.classList.add('ph'); });
   } else thumb = el('div', 'thumb ph');
   var info = el('div', 'info');
@@ -1587,7 +1633,7 @@ function lineCmp(a, b){ return (a.name || '').toLowerCase().localeCompare((b.nam
 function thumbEl(photoId){
   var thumb;
   if(photoId){
-    thumb = el('img', 'thumb'); thumb.alt = ''; thumb.loading = 'lazy'; thumb.decoding = 'async'; thumb.src = window.__photoUrl(photoId);
+    thumb = el('img', 'thumb'); thumb.alt = ''; thumb.loading = 'lazy'; thumb.decoding = 'async'; thumb.src = window.__thumbUrl(photoId);
     thumb.addEventListener('error', function(){ thumb.removeAttribute('src'); thumb.classList.add('ph'); });
   } else thumb = el('div', 'thumb ph');
   return thumb;
