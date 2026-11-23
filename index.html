@@ -1611,11 +1611,7 @@ function famEl(g, force){
   var ul = el('ul', 'shades'); ul.hidden = !open;
   codes.forEach(function(k){
     var ls = byCode[k];
-    if(ls.length > 1 && !g.auto){
-      var t = 0; ls.forEach(function(l){ t += Number(l.qty) || 0; });
-      var h = el('li', 'shade-h', ls[0].name + ' · ' + fmt(t) + (t === 1 ? ' unit' : ' units') + ' in ' + ls.length + ' lots');
-      ul.appendChild(h);
-    }
+    if(ls.length > 1 && !g.auto){ ul.appendChild(autoRowEl({ lines: ls })); return; }
     ls.forEach(function(l){ ul.appendChild(rowEl(l)); });
   });
   li.appendChild(ul);
