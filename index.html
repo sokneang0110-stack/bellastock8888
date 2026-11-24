@@ -1589,7 +1589,7 @@ function autoRowEl(g){
   var pl = window.__priceLabel ? window.__priceLabel(lines[0]) : ''; if(pl) info.appendChild(el('span', 'price', pl));
   var cl = window.__costLabel ? window.__costLabel(lines[0]) : ''; if(cl) info.appendChild(el('span', 'price cost', cl));
   var st = first ? expiryState(first) : '';
-  info.appendChild(el('span', 'exp' + (st ? ' ' + st : ''), lines.length + ' expiry dates' + (st === 'expired' ? ' · one expired' : (st === 'soon' ? ' · one soon' : ''))));
+  info.appendChild(el('span', 'exp' + (st ? ' ' + st : ''), (first ? 'Exp ' + first + ' · +' + fmt(lines.length - 1) + ' more' : lines.length + ' expiry dates') + (st === 'expired' ? ' · one expired' : (st === 'soon' ? ' · one soon' : ''))));
   var q = el('div', 'qty');
   q.appendChild(el('span', 'num', fmt(units)));
   if(!units) q.appendChild(el('span', 'pill', 'Out'));
