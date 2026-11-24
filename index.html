@@ -441,6 +441,7 @@ input:disabled:not(.cal){opacity:.5}
           <input id="rateIn" type="text" inputmode="numeric" autocomplete="off" placeholder="4100" aria-label="Riel for 1 US dollar">
           <span>riel</span>
           <button type="button" class="btn btn-small" id="rateSave">Save rate</button>
+          <button type="button" class="btn btn-quiet btn-small" id="rateBank" hidden>Use bank rate</button>
         </div>
         <p class="tiny" id="rateInfo"></p>
       </div>
@@ -2321,7 +2322,7 @@ $('pplAdd').addEventListener('click', function(){
 $('defLevel').addEventListener('change', function(){ run('setDefault', { level: $('defLevel').value }); });
 
 /* ---------- prices (owner only; kept in the script's private storage, not in the sheet) ---------- */
-var PR = { loaded: false, sell: {}, cost: {}, rate: 0, rateAt: '' }, curItem = null, famSure = '';
+var PR = { loaded: false, sell: {}, cost: {}, rate: 0, rateAt: '', src: '', bank: null }, curItem = null, famSure = '';
 function keyOf(it){ return it.barcode || it.id; }
 function money(n){ return '$' + (Math.round(n * 100) / 100).toFixed(2); }
 function rielOf(usd, rate){ return Math.round(Math.round(usd * 100) * rate / 10000) * 100; }
@@ -2338,24 +2339,38 @@ window.__costLabel = function(it){
   return (v === undefined || v === null) ? '' : 'Cost ' + money(v);
 };
 function repaint(){ try{ if(window.__rerender) window.__rerender(); }catch(e){} }
-function clearPrices(){ PR = { loaded: false, sell: {}, cost: {}, rate: 0, rateAt: '' }; $('pCost').value = ''; hidePanel(); repaint(); }
+function clearPrices(){ PR = { loaded: false, sell: {}, cost: {}, rate: 0, rateAt: '', src: '', bank: null }; $('pCost').value = ''; hidePanel(); repaint(); }
 async function loadPrices(){
   if(!acc || acc.level !== 'owner' || !tokenOk()) return;
   try{
     var j = await call('prices');
     if(!j.ok || !j.canSee) return;
-    PR = { loaded: true, sell: j.sell || {}, cost: j.cost || {}, rate: Number(j.rate) || 0, rateAt: j.rateAt || '' };
+    PR = { loaded: true, sell: j.sell || {}, cost: j.cost || {}, rate: Number(j.rate) || 0, rateAt: j.rateAt || '', src: j.rateSource || '', bank: j.bank || null };
     paintRate(); repaint();
     if(curItem) showPanel(curItem);
+    if(!PR.bank || PR.bank.stale) bankPing();
   }catch(e){ /* offline: prices stay hidden until the next try */ }
 }
+// The bank rate is fetched by the server in the background (it is slow), so ask for a refresh now and then.
+var lastPing = 0;
+async function bankPing(){
+  if(!window.__sheetUrl || Date.now() - lastPing < 5 * 60 * 1000) return;
+  lastPing = Date.now();
+  try{ await fetch(window.__sheetUrl + '?action=bankrefresh', { cache: 'no-store' }); }catch(e){ return; }
+  if(acc && acc.level === 'owner' && tokenOk()) loadPrices();
+}
+setTimeout(bankPing, 6000); setInterval(bankPing, 2 * 3600 * 1000);
 function paintRate(){
   if($('acctPrice').hidden) return;
   if(document.activeElement !== $('rateIn')) $('rateIn').value = PR.rate ? String(PR.rate) : '';
-  var d = PR.rateAt ? new Date(PR.rateAt) : null;
-  $('rateInfo').textContent = PR.rate
-    ? 'It stays the same until you change it.' + (d && !isNaN(d) ? ' Last changed ' + d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + '.' : '')
-    : 'Type today’s rate to see prices in riel.';
+  var d = PR.rateAt ? new Date(PR.rateAt) : null, bk = PR.bank, t = '';
+  var when = d && !isNaN(d) ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+  if(PR.src === 'bank') t = 'Today the app uses the ACLEDA bank Sell rate (' + riels(PR.rate).replace('៛', '') + '). Bank updated: ' + ((bk && bk.asof) || 'recently') + '. If you type your own rate and tap Save, it is used for today only.' + (bk && bk.stale ? ' The bank page cannot be reached now, so this is the last rate it gave.' : '');
+  else if(PR.src === 'manual') t = 'Using the rate you typed today. Tomorrow the app goes back to the bank rate' + (bk ? ' (now ' + riels(bk.sell).replace('៛', '') + ')' : '') + ' unless you type a new one.';
+  else if(PR.src === 'old') t = 'The bank rate cannot be reached now. Using the last rate you typed' + (when ? ' (' + when + ')' : '') + '.';
+  else t = 'Type today’s rate to see prices in riel.';
+  $('rateInfo').textContent = t;
+  $('rateBank').hidden = !(PR.src === 'manual' && bk);
 }
 function parseUsd(t){
   t = String(t || '').trim().replace(/^\$/, '').replace(',', '.');
@@ -2456,7 +2471,17 @@ $('rateSave').addEventListener('click', async function(){
   try{
     var j = await call('setRate', { rate: Number(t) });
     if(!j.ok){ msg(j.reason === 'bad_rate' ? 'That rate does not look right.' : (REASON[j.reason] || 'Something went wrong.'), 'bad'); return; }
-    PR.rate = Number(j.rate); PR.rateAt = j.rateAt || ''; paintRate(); repaint(); msg('Rate saved.');
+    PR.rate = Number(j.rate); PR.rateAt = j.rateAt || ''; PR.src = j.rateSource || ''; PR.bank = j.bank || null; paintRate(); repaint(); msg('Rate saved.');
+  }catch(e){ msg('Cannot reach the server. Nothing was changed.', 'bad'); }
+});
+$('rateBank').addEventListener('click', async function(){
+  if(!tokenOk()){ msg('Your sign in ended. Sign in again.', 'bad'); return; }
+  msg('Changing…');
+  try{
+    var j = await call('setRate', { useBank: true });
+    if(!j.ok){ msg(REASON[j.reason] || 'Something went wrong.', 'bad'); return; }
+    PR.rate = Number(j.rate) || 0; PR.rateAt = j.rateAt || ''; PR.src = j.rateSource || ''; PR.bank = j.bank || null;
+    $('rateIn').value = PR.rate ? String(PR.rate) : ''; paintRate(); repaint(); msg('Now using the bank rate.');
   }catch(e){ msg('Cannot reach the server. Nothing was changed.', 'bad'); }
 });
 setInterval(function(){
