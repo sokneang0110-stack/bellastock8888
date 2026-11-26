@@ -140,6 +140,23 @@ button,input{font:inherit;color:inherit}
 /* list */
 .toolbar{display:flex;gap:8px;margin-bottom:10px}
 .toolbar .search{flex:1;min-width:0}
+.list-top{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;margin-bottom:12px}
+.list-top .h2{margin:0}
+.count-chip{padding:5px 12px;border-radius:999px;background:var(--surface-2);color:var(--muted);font-size:14px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.list-actions{display:flex;align-items:center;gap:8px;margin-left:auto;min-width:0}
+.list-actions .btn{min-height:44px;padding:6px 12px;font-size:15px;white-space:nowrap}
+.brand-pick{position:relative;display:flex;align-items:center;gap:6px;min-height:44px;max-width:190px;padding:0 10px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink)}
+.brand-pick select{appearance:none;-webkit-appearance:none;border:0;background:transparent;color:inherit;font:inherit;font-size:15px;font-weight:600;min-width:0;width:100%;height:42px;padding:0 18px 0 0;text-overflow:ellipsis}
+.brand-pick .chev{position:absolute;right:10px;pointer-events:none}
+.brand-pick.on{border-color:var(--accent)}
+.search-wrap{position:relative;flex:1;min-width:0;display:flex;align-items:center}
+.search-wrap .search{padding-left:40px;padding-right:12px}
+.search-wrap .s-ico{position:absolute;left:12px;color:var(--muted);pointer-events:none}
+.kbd{display:none;position:absolute;right:10px;padding:3px 8px;border-radius:6px;background:var(--surface-2);color:var(--muted);font:600 13px var(--font-body,inherit)}
+@media (hover:hover) and (pointer:fine){.kbd{display:block}.search-wrap .search{padding-right:56px}}
+.scan-find{display:inline-flex;align-items:center;gap:8px}
+@media (max-width:430px){.toolbar .scan-find{padding:8px 10px;gap:6px;font-size:14px}.search-wrap .search::placeholder{font-size:14px}.search-wrap .search{padding-left:36px}.search-wrap .s-ico{left:10px}}
+.toolbar .pick,.toolbar #findBtn{background:#141b3a;border-color:#141b3a;color:#fff;font-weight:600;white-space:nowrap}
 .meta{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
 .meta .btn{min-height:40px;padding:6px 12px;font-size:14px}
 .find-note{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;margin-bottom:10px;border:1px solid var(--line);background:var(--surface);border-radius:12px;font-size:14px}
@@ -368,7 +385,8 @@ input:disabled:not(.cal){opacity:.5}
 
   <!-- LIST -->
   <section id="view-list" aria-labelledby="listTitle" hidden>
-    <h2 class="h2" id="listTitle">Item list</h2>
+    <div class="list-top">
+      <h2 class="h2" id="listTitle">Item list</h2>
     <details class="batch" id="syncBox">
       <summary class="batch-sum">
         <span class="batch-text"><span class="batch-title">Back up to Google Sheet</span><span class="tiny" id="syncTag">Not set up</span></span>
@@ -384,18 +402,24 @@ input:disabled:not(.cal){opacity:.5}
         <p class="status" id="syncStatus" role="status"></p>
       </div>
     </details>
+      <span class="count-chip" id="listCount">0 items</span>
+      <div class="list-actions">
+        <label class="brand-pick"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18l-7 8.5V19l-4 2v-8.5L3 4z"/></svg><select id="brandSel" aria-label="Filter by brand"><option value="">Brand: All</option></select><svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></label>
+        <button type="button" class="btn" id="exportBtn" hidden>Download CSV</button>
+      </div>
+    </div>
     <div class="toolbar">
-      <input class="search" id="search" type="search" placeholder="Search name or barcode" autocomplete="off" aria-label="Search items">
-      <button type="button" class="btn btn-small" id="findBtn">Scan to find</button>
+      <div class="search-wrap">
+        <svg class="s-ico" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input class="search" id="search" type="search" placeholder="Search name or barcode" autocomplete="off" aria-label="Search items">
+        <kbd class="kbd" id="kbdHint" aria-hidden="true">⌘K</kbd>
+      </div>
+      <button type="button" class="btn btn-small scan-find" id="findBtn"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V5a1 1 0 011-1h3M16 4h3a1 1 0 011 1v3M20 16v3a1 1 0 01-1 1h-3M8 20H5a1 1 0 01-1-1v-3M8 9v6M11 9v6M14 9v6M17 9v6"/></svg><span>Scan to find</span></button>
     </div>
     <button type="button" class="btn btn-small" id="noCost" hidden>No cost price</button>
     <div class="find-note" id="findNote" hidden>
       <span id="findText"></span>
       <button type="button" class="btn btn-small" id="findAdd" hidden>Add it</button>
-    </div>
-    <div class="meta">
-      <span id="listCount">0 items</span>
-      <button type="button" class="btn" id="exportBtn" hidden>Download CSV</button>
     </div>
     <ul class="rows" id="rows"></ul>
     <div class="msg" id="listMsg"><strong id="msgTitle">Loading your items</strong><span id="msgBody">This can take a moment on a slow connection.</span></div>
@@ -1692,6 +1716,36 @@ function famEl(g, force){
 }
 window.__allItems = function(){ return Array.from(items.values()); };
 window.__rerender = function(){ renderList(); };
+var BRAND_PREFIX = [['bath & body works','Bath & Body Works'],['bath & body','Bath & Body Works'],['mary & may','Mary & May'],['beauty of joseon','Beauty of Joseon'],['the face shop','The Face Shop'],['the ordinary','The Ordinary'],['dr. althea','Dr. Althea'],['some by mi','SOME BY MI'],['ph japan','PH Japan'],['skin aqua','Skin Aqua']];
+function brandLabelOf(name){
+  var n = String(name || '').trim(), l = n.toLowerCase();
+  for(var i = 0; i < BRAND_PREFIX.length; i++){ if(l.indexOf(BRAND_PREFIX[i][0]) === 0) return BRAND_PREFIX[i][1]; }
+  return n.split(/\s+/)[0] || '';
+}
+function brandKeyOf(name){ return brandLabelOf(name).toLowerCase(); }
+var lastBrandSig = '';
+function paintBrandSel(list){
+  var sel = $('brandSel'), cnt = new Map(), cas = new Map();
+  Array.from(items.values()).forEach(function(i){
+    var lab = brandLabelOf(i.name); if(!lab) return;
+    var k = lab.toLowerCase(); cnt.set(k, (cnt.get(k) || 0) + 1);
+    var c = cas.get(k) || {}; c[lab] = (c[lab] || 0) + 1; cas.set(k, c);
+  });
+  var keys = Array.from(cnt.keys()).sort(function(a, b){ return a.localeCompare(b); });
+  var sig = keys.map(function(k){ return k + ':' + cnt.get(k); }).join('|');
+  if(sig !== lastBrandSig){
+    lastBrandSig = sig;
+    var cur = sel.value, frag = document.createDocumentFragment(), o = document.createElement('option');
+    o.value = ''; o.textContent = 'Brand: All'; frag.appendChild(o);
+    keys.forEach(function(k){
+      var c = cas.get(k), best = Object.keys(c).sort(function(a, b){ return c[b] - c[a]; })[0];
+      var op = document.createElement('option'); op.value = k; op.textContent = best + ' (' + cnt.get(k) + ')'; frag.appendChild(op);
+    });
+    sel.replaceChildren(frag);
+    sel.value = cnt.has(cur) ? cur : '';
+  }
+  sel.parentNode.classList.toggle('on', !!sel.value);
+}
 function renderList(){
   var ul = $('rows'), msg = $('listMsg'), more = $('moreBtn');
   var q = $('search').value.trim().toLowerCase();
@@ -1704,6 +1758,9 @@ function renderList(){
   }
   var all = Array.from(items.values());
   var xf = window.__extraFilter; if(xf) all = all.filter(xf);
+  paintBrandSel(all);
+  var bsel = $('brandSel').value;
+  if(bsel) all = all.filter(function(i){ return brandKeyOf(i.name) === bsel; });
   var hit = function(i){ return !q || (i.name || '').toLowerCase().indexOf(q) >= 0 || (i.barcode || '').toLowerCase().indexOf(q) >= 0 || (i.brand || '').toLowerCase().indexOf(q) >= 0 || (i.batchCode || '').toLowerCase().indexOf(q) >= 0 || (i.family || '').toLowerCase().indexOf(q) >= 0; };
   var groups = new Map(), entries = [], bcCount = {};
   all.forEach(function(it){ if(!it.family && it.barcode) bcCount[it.barcode] = (bcCount[it.barcode] || 0) + 1; });
@@ -1726,7 +1783,7 @@ function renderList(){
   var lineCount = 0;
   entries.forEach(function(e){ lineCount += e.group ? e.group.lines.length : 1; });
   var ln = function(n){ return fmt(n) + (n === 1 ? ' line' : ' lines'); };
-  $('listCount').textContent = (q || xf) ? fmt(lineCount) + ' of ' + ln(items.size) : ln(items.size);
+  $('listCount').textContent = (q || xf || bsel) ? fmt(lineCount) + ' of ' + ln(items.size) : ln(items.size);
   var frag = document.createDocumentFragment();
   entries.slice(0, shown).forEach(function(e){ frag.appendChild(e.group ? (e.group.auto ? autoRowEl(e.group) : famEl(e.group, false)) : rowEl(e.item)); });
   ul.replaceChildren(frag);
@@ -1739,6 +1796,11 @@ function renderList(){
   more.textContent = 'Show more (' + fmt(entries.length - shown) + ' left)';
 }
 $('search').addEventListener('input', function(){ shown = 60; openFam.clear(); renderList(); });
+$('brandSel').addEventListener('change', function(){ shown = 60; openFam.clear(); renderList(); });
+try{ if(!/Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent)) $('kbdHint').textContent = 'Ctrl K'; }catch(e){}
+document.addEventListener('keydown', function(e){
+  if((e.metaKey || e.ctrlKey) && String(e.key).toLowerCase() === 'k' && !$('view-list').hidden){ e.preventDefault(); $('search').focus(); $('search').select(); }
+});
 window.__closeFamilies = function(){ openFam.clear(); };
 $('moreBtn').addEventListener('click', function(){ shown += 60; renderList(); });
 $('rows').addEventListener('click', function(e){
