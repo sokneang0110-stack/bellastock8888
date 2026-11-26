@@ -526,7 +526,6 @@ input:disabled:not(.cal){opacity:.5}
         <div class="pbox">
           <div class="inline">
             <input id="pSell" type="text" inputmode="decimal" autocomplete="off" placeholder="For example 5.50" aria-label="Sell price in US dollars">
-            <button type="button" class="btn btn-small" id="pSave">Save prices</button>
           </div>
           <span class="tiny" id="pRiel"></span>
           <label class="tiny" for="pCost">Cost price (USD). Only owners can see this.</label>
@@ -1828,6 +1827,8 @@ $('sheetForm').addEventListener('submit', async function(e){
   saving = true;
   var btn = $('sheetSave'); btn.disabled = true; btn.textContent = 'Saving…';
   try{
+    var pr = window.__savePrices ? await window.__savePrices() : { ok: true };
+    if(!pr.ok){ fail(err, pr.msg, pr.field); return; }
     var r = await saveItem({ id: it.id, barcode: it.barcode, name: name, qty: qty, expiry: expiry, noExpiry: noE, brand: it.brand, batchCode: it.batchCode, expirySource: noE ? '' : (it.expiry === expiry ? it.expirySource : 'edited'), family: fam, photoBlob: sheetPhoto.blob, existing: it });
     if(it.barcode && fam !== (it.family || '')){
       var sib = Array.from(items.values()).filter(function(x){ return x.id !== it.id && x.barcode === it.barcode && (x.family || '') !== fam; });
@@ -1837,7 +1838,7 @@ $('sheetForm').addEventListener('submit', async function(e){
       }
     }
     closeSheet();
-    toast(r.photoSkipped ? 'Saved, but the photo could not be stored. Try the photo again.' : 'Saved ' + name + ' · ' + fmt(qty));
+    toast(r.photoSkipped ? 'Saved, but the photo could not be stored. Try the photo again.' : 'Saved ' + name + ' · ' + fmt(qty) + (pr.saved ? ' · prices saved' : ''));
   }catch(ex){
     fail(err, describeError(ex));
   }finally{
@@ -2441,16 +2442,25 @@ function readBoth(){
   if(!s || !c){ pmsg('Type prices like 5.50', true); return null; }
   return { s: s, c: c };
 }
-$('pSave').addEventListener('click', function(){
-  if(!curItem) return;
-  var both = readBoth(); if(!both) return;
+// Prices are saved together with "Save changes" (and Enter), so there is no separate button.
+window.__savePrices = async function(){
+  if(!curItem || $('pricePanel').hidden) return { ok: true };
+  var s = parseUsd($('pSell').value), c = parseUsd($('pCost').value);
+  if(!s) return { ok: false, msg: 'Check the sell price. Type it like 5.50.', field: $('pSell') };
+  if(!c) return { ok: false, msg: 'Check the cost price. Type it like 3.20.', field: $('pCost') };
   var k = keyOf(curItem), jobs = [], oldS = PR.sell[k], oldC = PR.cost[k];
-  var newS = both.s.clear ? null : both.s.v, newC = both.c.clear ? null : both.c.v;
+  var newS = s.clear ? null : s.v, newC = c.clear ? null : c.v;
   if(newS !== (oldS === undefined ? null : oldS)) jobs.push(['sell', [k], newS]);
   if(newC !== (oldC === undefined ? null : oldC)) jobs.push(['cost', [k], newC]);
-  if(!jobs.length){ pmsg('Nothing changed.'); return; }
-  sendAll(jobs, 'Prices saved.');
-});
+  if(!jobs.length) return { ok: true };
+  if(!tokenOk()) return { ok: false, msg: 'Your sign in ended. Tap Sign in at the top, then save again.' };
+  try{
+    for(var i = 0; i < jobs.length; i++) await send(jobs[i][0], jobs[i][1], jobs[i][2]);
+    riel(); repaint(); return { ok: true, saved: true };
+  }catch(e){
+    return { ok: false, msg: e && e.message && PREASON[e.message] ? PREASON[e.message] : 'Cannot save the prices. Check your connection and try again.' };
+  }
+};
 $('pFam').addEventListener('click', function(){
   if(!curItem) return;
   var both = readBoth(); if(!both) return;
