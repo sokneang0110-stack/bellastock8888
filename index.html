@@ -544,6 +544,26 @@ input:disabled:not(.cal){opacity:.5}
           <button type="button" class="step" data-for="eQty" data-step="1" aria-label="Plus one">+</button>
         </div>
       </div>
+      <details class="batch" id="eBatchBox">
+        <summary class="batch-sum">
+          <span class="batch-text">
+            <span class="batch-title">Japan product only</span>
+            <span class="tiny" id="eBatchTag" hidden></span>
+          </span>
+          <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+        </summary>
+        <div class="batch-body">
+          <div class="combo">
+            <input id="eBrandInput" type="text" autocomplete="off" autocapitalize="words" spellcheck="false" placeholder="Brand: type the first letter" aria-label="Brand">
+            <div class="drop" id="eBrandDrop" role="listbox" aria-label="Brand list" hidden></div>
+          </div>
+          <div class="inline">
+            <input id="eBatchCode" class="mono" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Batch code" aria-label="Batch code">
+            <button type="button" class="btn btn-small" id="eSearchBtn">Search</button>
+          </div>
+          <p class="status" id="eBatchStatus" role="status" data-kind="">Choose the brand, type the batch code, then tap Search.</p>
+        </div>
+      </details>
       <div class="field">
         <label for="eExpiry">Expiry date (required)</label>
         <div class="inline">
@@ -1148,7 +1168,7 @@ function loadBrands(){
     if(r && r.brands && r.brands.length){
       brandList = r.brands;
       try{ localStorage.setItem('stockroom-brands', JSON.stringify(brandList)); }catch(e){}
-      showDrop();
+      showDrop(); eShowDrop();
     } else brandFetched = false;
   }, function(){ brandFetched = false; });
 }
@@ -1769,6 +1789,117 @@ $('exportBtn').addEventListener('click', async function(){
 });
 
 /* edit sheet */
+/* Japan product search on the Edit screen (same search as Add item; the date is saved only with Save changes) */
+var eBrand = '', eLastExp = '', eSeq = 0;
+function eTag(){
+  var tag = $('eBatchTag'), t = [eBrand, $('eBatchCode').value.trim()].filter(Boolean).join(' · ');
+  tag.textContent = t; tag.hidden = !t;
+}
+function eBatchReset(it){
+  eBrand = (it && it.brand) || ''; $('eBrandInput').value = eBrand;
+  $('eBatchCode').value = (it && it.batchCode) || '';
+  eLastExp = ''; eSeq++; $('eSearchBtn').disabled = false; $('eBrandDrop').hidden = true;
+  $('eBatchBox').open = false; eTag();
+  setStatus($('eBatchStatus'), 'Choose the brand, type the batch code, then tap Search. The Expiry date below will change. It is saved only when you tap Save changes.', '');
+}
+function eHideDrop(){ $('eBrandDrop').hidden = true; }
+function eShowDrop(){
+  var box = $('eBrandDrop'), q = $('eBrandInput').value.trim();
+  if(!q || (eBrand && eBrand === q) || document.activeElement !== $('eBrandInput')){ box.hidden = true; return; }
+  var found = matchBrands(q), frag = document.createDocumentFragment();
+  if(!found.length){
+    frag.appendChild(el('div', 'note', brandList.length ? 'No brand found. Check the spelling.' : (sheetUrl ? 'Loading the brand list…' : 'The brand list is not available here.')));
+  } else {
+    found.slice(0, 300).forEach(function(n){
+      var o = el('button', 'opt', n); o.type = 'button'; o.dataset.name = n; o.setAttribute('role', 'option'); frag.appendChild(o);
+    });
+  }
+  box.replaceChildren(frag); box.scrollTop = 0; box.hidden = false;
+}
+function eResolveBrand(){
+  if(eBrand) return eBrand;
+  var t = plainText($('eBrandInput').value.trim());
+  if(!t) return '';
+  var exact = brandList.filter(function(b){ return plainText(b) === t; });
+  if(exact.length === 1){ eBrand = exact[0]; $('eBrandInput').value = exact[0]; eTag(); return eBrand; }
+  return '';
+}
+function eChooseBrand(name){
+  eBrand = name; $('eBrandInput').value = name; eHideDrop(); eBatchEdited(); $('eBatchCode').focus();
+}
+function eBatchEdited(){
+  eTag(); eSeq++; $('eSearchBtn').disabled = false; eLastExp = '';
+  setStatus($('eBatchStatus'), 'Choose the brand, type the batch code, then tap Search.', '');
+}
+function eFillExpiry(ev){
+  var old = noExp.eExpiry ? 'No expiration date' : $('eExpiry').value.trim();
+  setExpiry('eExpiry', ev); eLastExp = ev;
+  return old && old !== ev ? ' Old date was ' + old + '.' : '';
+}
+function eShowLookup(r){
+  var st = $('eBatchStatus');
+  if(r && r.ok){
+    var made = (r.day > 0 ? r.day + ' ' : '') + MONTH_NAMES[r.month - 1] + ' ' + r.year;
+    var ev = expiryFromLookup(r);
+    if(!ev){ setStatus(st, 'Made ' + made + '. The shelf life is not known, so type the expiry in the Expiry box.', 'warn'); return; }
+    var was = eFillExpiry(ev);
+    setStatus(st, 'Made ' + made + '. Shelf life ' + r.shelf + ' months. Expiry ' + ev + ' filled in.' + was + ' This is an estimate. Tap Save changes to keep it.', 'good');
+    return;
+  }
+  var why = r && r.reason;
+  if(why === 'not_found') setStatus(st, 'No date found for this batch. Check the brand and the code, or type the date printed on the box.', 'warn');
+  else if(why === 'site_changed') setStatus(st, 'The batch checker changed and cannot be read. Type the date printed on the box.', 'warn');
+  else setStatus(st, 'Could not get the date right now. Try Search again, or type the date.', 'warn');
+}
+function eDoSearch(){
+  var st = $('eBatchStatus'), code = $('eBatchCode').value.trim(), br = eResolveBrand();
+  if(!br){ setStatus(st, 'Type the brand and tap its name in the list.', 'warn'); $('eBrandInput').focus(); return; }
+  if(!code){ setStatus(st, 'Type the batch code, then tap Search.', 'warn'); $('eBatchCode').focus(); return; }
+  var key = batchKey(br, code), m = batches.get(key);
+  if(m && m.expiry){
+    var was = eFillExpiry(m.expiry);
+    setStatus(st, 'Known batch. Expiry ' + m.expiry + ' filled in.' + was + ' Tap Save changes to keep it.', 'good');
+    return;
+  }
+  if(lookups.has(key)){ eShowLookup(lookups.get(key)); return; }
+  if(!sheetUrl){ setStatus(st, 'Search is not available here. Type the date printed on the box.', 'warn'); return; }
+  var my = ++eSeq, btn = $('eSearchBtn');
+  setStatus(st, 'Searching…', ''); btn.disabled = true;
+  lookupFetch('action=batch&brand=' + encodeURIComponent(br) + '&code=' + encodeURIComponent(code)).then(function(r){
+    if(r && (r.ok || r.reason === 'not_found')) lookups.set(key, r);
+    return r;
+  }, function(){ return null; }).then(function(r){
+    btn.disabled = false;
+    if(my !== eSeq) return;
+    eShowLookup(r);
+  });
+}
+$('eSearchBtn').addEventListener('click', eDoSearch);
+$('eBatchCode').addEventListener('input', eBatchEdited);
+$('eBrandInput').addEventListener('focus', function(){
+  loadBrands(); eShowDrop();
+  setTimeout(function(){ try{ $('eBrandInput').scrollIntoView({ block: 'center', behavior: 'smooth' }); }catch(e){} }, 250);
+});
+$('eBrandInput').addEventListener('input', function(){
+  loadBrands();
+  if(eBrand && eBrand !== $('eBrandInput').value){ eBrand = ''; eBatchEdited(); }
+  eShowDrop();
+});
+$('eBrandInput').addEventListener('keydown', function(e){
+  if(e.key !== 'Enter') return;
+  e.preventDefault();
+  var f = matchBrands($('eBrandInput').value);
+  if(f.length === 1) eChooseBrand(f[0]);
+});
+$('eBrandDrop').addEventListener('click', function(e){
+  var b = e.target.closest ? e.target.closest('.opt') : null;
+  if(b && b.dataset.name) eChooseBrand(b.dataset.name);
+});
+$('eBrandDrop').addEventListener('mousedown', function(e){ e.preventDefault(); });
+$('eBrandInput').addEventListener('blur', eHideDrop);
+document.addEventListener('click', function(e){
+  if(!(e.target.closest && e.target.closest('.combo'))) eHideDrop();
+});
 function openSheet(id){
   var it = items.get(id);
   if(!it) return;
@@ -1781,6 +1912,7 @@ function openSheet(id){
   $('eQty').value = it.qty;
   setExpiry('eExpiry', it.expiry || '');
   if(it.noExpiry && !it.expiry) setNoExp('eExpiry', true);
+  eBatchReset(it);
   $('confirmDel').hidden = true; $('delBtn').hidden = false;
   $('sheetError').textContent = '';
   paintSheetPreview();
@@ -1789,7 +1921,7 @@ function openSheet(id){
   document.body.style.overflow = 'hidden';
 }
 function closeSheet(){
-  $('sheet').hidden = true; editId = null;
+  $('sheet').hidden = true; editId = null; eSeq++;
   if(window.__onEditClose) window.__onEditClose();
   setPhotoState(sheetPhoto, null);
   document.body.style.overflow = '';
@@ -1832,7 +1964,15 @@ $('sheetForm').addEventListener('submit', async function(e){
   try{
     var pr = window.__savePrices ? await window.__savePrices() : { ok: true };
     if(!pr.ok){ fail(err, pr.msg, pr.field); return; }
-    var r = await saveItem({ id: it.id, barcode: it.barcode, name: name, qty: qty, expiry: expiry, noExpiry: noE, brand: it.brand, batchCode: it.batchCode, expirySource: noE ? '' : (it.expiry === expiry ? it.expirySource : 'edited'), family: fam, photoBlob: sheetPhoto.blob, existing: it });
+    var eCode = $('eBatchCode').value.trim();
+    var usedB = !!(eBrand && eCode && !noE && eLastExp && expiry === eLastExp);
+    var r = await saveItem({ id: it.id, barcode: it.barcode, name: name, qty: qty, expiry: expiry, noExpiry: noE, brand: usedB ? eBrand : it.brand, batchCode: usedB ? eCode : it.batchCode, expirySource: noE ? '' : (usedB ? 'batch' : (it.expiry === expiry ? it.expirySource : 'edited')), family: fam, photoBlob: sheetPhoto.blob, existing: it });
+    if(usedB){
+      var ebk = batchKey(eBrand, eCode), eknown = batches.get(ebk);
+      if(!eknown || eknown.expiry !== expiry){
+        try{ await withTimeout(db.collection('batches').doc(ebk).set({ brand: eBrand, code: eCode, expiry: expiry, updatedAt: new Date().toISOString() }), 15000); }catch(e){}
+      }
+    }
     if(it.barcode && fam !== (it.family || '')){
       var sib = Array.from(items.values()).filter(function(x){ return x.id !== it.id && x.barcode === it.barcode && (x.family || '') !== fam; });
       for(var si = 0; si < sib.length; si++){
