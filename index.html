@@ -388,6 +388,7 @@ input:disabled:not(.cal){opacity:.5}
       <input class="search" id="search" type="search" placeholder="Search name or barcode" autocomplete="off" aria-label="Search items">
       <button type="button" class="btn btn-small" id="findBtn">Scan to find</button>
     </div>
+    <button type="button" class="btn btn-small" id="noCost" hidden>No cost price</button>
     <div class="find-note" id="findNote" hidden>
       <span id="findText"></span>
       <button type="button" class="btn btn-small" id="findAdd" hidden>Add it</button>
@@ -1682,6 +1683,7 @@ function renderList(){
     return;
   }
   var all = Array.from(items.values());
+  var xf = window.__extraFilter; if(xf) all = all.filter(xf);
   var hit = function(i){ return !q || (i.name || '').toLowerCase().indexOf(q) >= 0 || (i.barcode || '').toLowerCase().indexOf(q) >= 0 || (i.brand || '').toLowerCase().indexOf(q) >= 0 || (i.batchCode || '').toLowerCase().indexOf(q) >= 0 || (i.family || '').toLowerCase().indexOf(q) >= 0; };
   var groups = new Map(), entries = [], bcCount = {};
   all.forEach(function(it){ if(!it.family && it.barcode) bcCount[it.barcode] = (bcCount[it.barcode] || 0) + 1; });
@@ -1704,7 +1706,7 @@ function renderList(){
   var lineCount = 0;
   entries.forEach(function(e){ lineCount += e.group ? e.group.lines.length : 1; });
   var ln = function(n){ return fmt(n) + (n === 1 ? ' line' : ' lines'); };
-  $('listCount').textContent = q ? fmt(lineCount) + ' of ' + ln(items.size) : ln(items.size);
+  $('listCount').textContent = (q || xf) ? fmt(lineCount) + ' of ' + ln(items.size) : ln(items.size);
   var frag = document.createDocumentFragment();
   entries.slice(0, shown).forEach(function(e){ frag.appendChild(e.group ? (e.group.auto ? autoRowEl(e.group) : famEl(e.group, !!q)) : rowEl(e.item)); });
   ul.replaceChildren(frag);
@@ -2339,8 +2341,17 @@ window.__costLabel = function(it){
   var v = PR.cost[keyOf(it)];
   return (v === undefined || v === null) ? '' : 'Cost ' + money(v);
 };
-function repaint(){ try{ if(window.__rerender) window.__rerender(); }catch(e){} }
-function clearPrices(){ PR = { loaded: false, sell: {}, cost: {}, rate: 0, rateAt: '', src: '', bank: null }; $('pCost').value = ''; hidePanel(); repaint(); }
+function repaint(){ try{ if(window.__rerender) window.__rerender(); }catch(e){} try{ paintNoCost(); }catch(e){} }
+var noCostOn = false;
+function paintNoCost(){
+  var b = $('noCost'); if(!b) return;
+  var okOwner = !!(acc && acc.level === 'owner' && PR.loaded && tokenOk());
+  if(!okOwner){ b.hidden = true; if(noCostOn){ noCostOn = false; window.__extraFilter = null; repaintList(); } return; }
+  var n = (window.__allItems ? window.__allItems() : []).filter(function(it){ return PR.cost[keyOf(it)] === undefined; }).length;
+  b.hidden = false; b.textContent = (noCostOn ? '✓ ' : '') + 'No cost price (' + n + ')'; b.classList.toggle('btn-primary', noCostOn);
+}
+function repaintList(){ try{ if(window.__rerender) window.__rerender(); }catch(e){} }
+function clearPrices(){ PR = { loaded: false, sell: {}, cost: {}, rate: 0, rateAt: '', src: '', bank: null }; $('pCost').value = ''; hidePanel(); repaint(); paintNoCost(); }
 async function loadPrices(){
   if(!acc || acc.level !== 'owner' || !tokenOk()) return;
   try{
@@ -2461,6 +2472,11 @@ window.__savePrices = async function(){
     return { ok: false, msg: e && e.message && PREASON[e.message] ? PREASON[e.message] : 'Cannot save the prices. Check your connection and try again.' };
   }
 };
+$('noCost').addEventListener('click', function(){
+  noCostOn = !noCostOn;
+  window.__extraFilter = noCostOn ? function(it){ return PR.cost[keyOf(it)] === undefined; } : null;
+  paintNoCost(); repaintList();
+});
 $('pFam').addEventListener('click', function(){
   if(!curItem) return;
   var both = readBoth(); if(!both) return;
@@ -2495,7 +2511,7 @@ $('rateBank').addEventListener('click', async function(){
   }catch(e){ msg('Cannot reach the server. Nothing was changed.', 'bad'); }
 });
 setInterval(function(){
-  paintChip();
+  paintChip(); paintNoCost();
   if(acc && !tokenOk() && gsiReady){ try{ window.google.accounts.id.prompt(); }catch(e){} }
 }, 20000);
 chip();
